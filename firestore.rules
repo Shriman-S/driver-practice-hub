@@ -1,0 +1,21 @@
+// Publish these rules from the Firebase console (Firestore Database > Rules). They are the actual access control, not hidden UI buttons.
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() { return request.auth != null; }
+    function admin() { return signedIn() && exists(/databases/$(database)/documents/admins/$(request.auth.uid)); }
+
+    // Students may only CREATE their own bounded-size submission; no client can read student records. (Administrators can read and delete.)
+    // This covers the four built-in drills AND custom forms: every attempt is saved with the same set of top-level fields.
+    match /submissions/{id} { allow create: if signedIn() && request.resource.data.userId == request.auth.uid && request.resource.data.keys().hasOnly(['id','facet','driverName','grade','date','data','score','createdAt','userId']) && request.resource.data.driverName is string && request.resource.data.driverName.size() <= 80; allow read, update, delete: if admin(); }
+
+    // Everyone can READ the practice calendar, the published course layouts, and the custom practice forms (students need them to
+    // record a practice). Only administrators can create, change, or delete them.
+    match /events/{id} { allow read: if true; allow write: if admin(); }
+    match /courses/{id} { allow read: if true; allow write: if admin(); }
+    match /customForms/{id} { allow read: if true; allow write: if admin(); }
+
+    // The list of administrator accounts. Only an existing administrator can see or change it.
+    match /admins/{id} { allow read, write: if admin(); }
+  }
+}

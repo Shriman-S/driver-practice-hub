@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="Private, no-cost FRC driver practice tracking." />
+    <title>DriveLab | FRC Driver Practice</title>
+    <link rel="stylesheet" href="css/styles.css" />
+  </head>
+  <body>
+    <!-- This static app deliberately uses no trackers, ads, or third-party analytics. -->
+    <div class="app-shell">
+      <aside class="sidebar">
+        <a class="brand" href="#practice" aria-label="DriveLab home"><span class="brand-mark">DL</span><span>DriveLab<small>DRIVER PRACTICE</small></span></a>
+        <nav aria-label="Primary navigation">
+          <button class="nav-link active" data-route="practice">Practice form</button>
+          <button class="nav-link" data-route="calendar">Practice calendar</button>
+          <button class="nav-link" data-route="courses">Courses</button>
+          <button class="nav-link admin-only" data-route="analysis" hidden>Analysis</button>
+          <button class="nav-link admin-only" data-route="course-builder" hidden>Course builder</button>
+          <button class="nav-link admin-only" data-route="forms" hidden>Form builder</button>
+          <button class="nav-link admin-only" data-route="admin" hidden>Admin</button>
+        </nav>
+        <div class="sidebar-footer"><span class="connection-dot"></span><span id="connection-status">Private local preview</span></div>
+      </aside>
+      <main>
+        <header class="topbar"><div><p class="eyebrow" id="page-kicker">DRIVER DEVELOPMENT</p><h1 id="page-title">Practice form</h1></div><div class="account"><span id="account-label">Guest recorder</span><button id="admin-button" class="button button-secondary">Administrator sign in</button></div></header>
+        <section id="app" aria-live="polite"></section>
+      </main>
+    </div>
+    <dialog id="modal"><div id="modal-content"></div></dialog>
+    <template id="toast-template"><div class="toast" role="status"></div></template>
+    <script type="module" src="js/app.js"></script>
+  </body>
+</html>
