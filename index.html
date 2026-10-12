@@ -5,13 +5,23 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="description" content="Private, no-cost FRC driver practice tracking." />
     <title>DriveLab | FRC Driver Practice</title>
+    <meta name="color-scheme" content="light dark" />
+    <!-- Applies the saved light/dark choice (or the device setting) before the page is drawn, so it never flashes the wrong theme. -->
+    <script>
+      (function () {
+        var saved = null;
+        try { saved = localStorage.getItem("drivelab-theme"); } catch (e) {}
+        var dark = saved ? saved === "dark" : window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+        document.documentElement.dataset.theme = dark ? "dark" : "light";
+      })();
+    </script>
     <link rel="stylesheet" href="css/styles.css" />
   </head>
   <body>
     <!-- This static app deliberately uses no trackers, ads, or third-party analytics. -->
     <div class="app-shell">
       <aside class="sidebar">
-        <a class="brand" href="#practice" aria-label="DriveLab home"><span class="brand-mark">DL</span><span>DriveLab<small>DRIVER PRACTICE</small></span></a>
+        <a class="brand" href="#practice" aria-label="DriveLab: go to the Practice form" title="Go to the Practice form"><span class="brand-mark">DL</span><span>DriveLab<small>DRIVER PRACTICE</small></span></a>
         <nav aria-label="Primary navigation">
           <button class="nav-link active" data-route="practice">Practice form</button>
           <button class="nav-link" data-route="calendar">Practice calendar</button>
@@ -24,7 +34,7 @@
         <div class="sidebar-footer"><span class="connection-dot"></span><span id="connection-status">Private local preview</span></div>
       </aside>
       <main>
-        <header class="topbar"><div><p class="eyebrow" id="page-kicker">DRIVER DEVELOPMENT</p><h1 id="page-title">Practice form</h1></div><div class="account"><span id="account-label">Guest recorder</span><button id="admin-button" class="button button-secondary">Administrator sign in</button></div></header>
+        <header class="topbar"><div><p class="eyebrow" id="page-kicker">DRIVER DEVELOPMENT</p><h1 id="page-title">Practice form</h1></div><div class="account"><button id="theme-toggle" class="button button-secondary theme-toggle" type="button" aria-pressed="false" title="Switch to dark mode"><svg class="icon-moon" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5Z" fill="currentColor"/></svg><svg class="icon-sun" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><circle cx="12" cy="12" r="4.5" fill="currentColor"/><g stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 2v2.5M12 19.5V22M2 12h2.5M19.5 12H22M4.9 4.9l1.8 1.8M17.3 17.3l1.8 1.8M4.9 19.1l1.8-1.8M17.3 6.7l1.8-1.8"/></g></svg><span class="theme-label">Dark mode</span></button><span id="account-label">Guest recorder</span><button id="admin-button" class="button button-secondary">Administrator sign in</button></div></header>
         <section id="app" aria-live="polite"></section>
       </main>
     </div>

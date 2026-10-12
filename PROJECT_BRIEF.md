@@ -382,3 +382,73 @@ Every course now has a **key** that lists only the features that course actually
 - Lap paths are offered on Speed driving courses only, matching the Speed form's two laps; the data format itself stores a lap number, so other drills could be given laps later.
 
 **Files affected:** `js/courses.js`, `css/styles.css`, `README.md`
+
+### Update 24: Administrators stay signed in when the page is refreshed
+
+**Problem with the previous version:** Refreshing the page always signed an administrator out, so they had to sign in with Google again. On every page load, `initializeStorage()` called `signInAnonymously()` unconditionally, which replaced the Google account that Firebase had restored with a new guest identity.
+
+**How it was fixed (simple):** The site now remembers the administrator's sign-in for the current browser tab. Refreshing keeps them signed in (and on the same page). They are signed out only when they press **Log out** or close the tab.
+
+**How it was fixed (technical detail):**
+
+- `initializeStorage()` calls `setPersistence(firebaseAuth, browserSessionPersistence)`, so Firebase keeps the signed-in account in the tab's `sessionStorage`. That storage survives a refresh but is erased when the tab is closed, which gives exactly the required lifetime. (Firebase's default, `indexedDB`, would also survive closing the browser.) An account saved by an older version is moved to the new storage automatically.
+- It then waits for `firebaseAuth.authStateReady()` and inspects `currentUser`: a restored **Google** account is checked against `admins/{uid}` and, if it is still on the allow-list, the administrator session is restored (`isAdmin: true`). If it was removed from the allow-list, it is signed out. A restored **anonymous** guest is reused. Only when there is no account does it create a new anonymous guest (`ensureGuest()`).
+- The `admins/{uid}` check is shared by sign-in and restore through a new `checkAdmin(uid)` helper, which keeps Update 5's handling (a `permission-denied` result means "not an administrator"; other errors are re-thrown).
+- A Google account that is not on the allow-list is now signed straight back out after the "not on the administrator allow-list" message, and the tab returns to a guest identity, so a refresh never restores a non-administrator Google account.
+- `setRoute()` stores the current page in `sessionStorage` (`drivelab-route`), and `init()` reopens it after a refresh. An administrator-only page is reopened only if the administrator session was restored; otherwise the Practice form is shown.
+- Access control is unchanged: data is still protected by `firestore.rules` on Firebase's servers. Logging out and closing the tab both remove the credential from the browser. Because guest identities now also last for one tab, closing the tab gives the next visit a new anonymous identity; this has no effect on saved data.
+
+**Files affected:** `js/storage.js`, `js/app.js`
+
+### Update 25: Dark mode for all users
+
+**Problem with the previous version:** The site had only a light theme, which is bright in a dark practice space or in the evening.
+
+**How it was fixed (simple):** Everyone (guests and administrators) has a **Dark mode / Light mode** button in the top bar. The choice is remembered in that browser. Before a choice is made, the site follows the device's light or dark setting. Every page is themed, including forms, timers, tables, the calendar, dialogs, the Form builder, and the course pictures (walls are drawn light on a dark field in dark mode).
+
+**How it was fixed (technical detail):**
+
+- Every hard-coded light colour in `styles.css` became a CSS variable in `:root` (for example `--input-bg`, `--soft`, `--timer-bg`, `--pill-bg`, `--course-wall`). `:root[data-theme="dark"]` redefines the same variables, so the dark theme lives in one block and every existing rule follows it. `color-scheme` is set per theme so native controls (date and time pickers, dropdowns, scrollbars) match.
+- A small inline script in `<head>` of `index.html` sets `data-theme` from `localStorage` (`drivelab-theme`) or `prefers-color-scheme` before the stylesheet is applied, so the page never flashes the wrong theme. `bindThemeToggle()` in `app.js` handles the button (`aria-pressed`, label, icon), saves the choice, and follows a change in the device setting while no choice has been saved.
+- Course pictures: the SVG background rectangle and wall group carry `course-bg-fill` / `course-wall-fill` classes. CSS `fill` overrides the SVG colour attributes, so the pictures, key icons, and tool icons re-colour with the theme while marker and path colours stay the same in both themes.
+- The PDF report is unaffected and is always printed in the light style.
+
+**Files affected:** `index.html`, `css/styles.css`, `js/app.js`, `js/courses.js`
+
+### Update 26: Scoring equations on the Analysis page
+
+**Problem with the previous version:** Administrators could see scores but not how they were calculated, apart from a one-line description of the overall formula.
+
+**How it was fixed (simple):** The Analysis page now shows the scoring equations. **General statistics** has a **Scoring equations** section with the overall ranking formula and every component of all four facet scores. Each facet view (for example Speed driving) has a **How the Speed driving score is calculated** section with that facet's equations. Every equation has a short explanation of why that formula and its weights suit the drill.
+
+**How it was fixed (technical detail):** New module `js/formulas.js` holds the equations as data (`SCORING_DOCS` per facet and `OVERALL_DOC`) and renders them (`allEquationsHtml()`, `facetEquationsHtml()`) with plain HTML (italic variables, subscripts, stacked fractions), so no math library or CDN is needed. `scoring.js` is unchanged and is still the only place scores are calculated; a comment at the top of `formulas.js` asks for it to be updated whenever a weight or benchmark in `scoring.js` changes. Custom forms are unaffected because they are ranked by an administrator-chosen question rather than a formula.
+
+**Files affected:** `js/formulas.js` (new), `js/app.js`, `css/styles.css`
+
+### Update 27: Calendar events have a start and end time, shown in 12-hour format
+
+**Problem with the previous version:** An event had a single optional time, and the calendar showed it in 24-hour format (for example `16:00`).
+
+**How it was fixed (simple):** **Add practice** now has **Start time** and **End time** boxes (both optional). The calendar and the day popup show times in 12-hour format, such as "4:00 PM – 6:30 PM". Events in a day are listed in time order. The site refuses an end time with no start time, or an end time that is not later than the start time. Events saved before this change still show their time, as the start time.
+
+**How it was fixed (technical detail):** Events are saved with `startTime` and `endTime` as `HH:MM` text (what `<input type="time">` produces, so stored values do not depend on the viewer's locale) instead of `time`. `time12()` converts `HH:MM` to 12-hour text (`00:30` becomes 12:30 AM, `12:00` becomes 12:00 PM), `eventTimeText()` builds the range, and `eventsOn(day)` sorts a day's events by start time with untimed events last. A legacy `time` field is read as the start time, so no data migration is needed. Validation compares the `HH:MM` strings directly, which sort correctly as text. The event pill shows the time on its own line above the title so the time is not cut off in narrow cells, and a failed save now shows an error toast instead of failing silently. The `events` Firestore rule has no field allow-list, so `firestore.rules` does not need to change.
+
+**Files affected:** `js/app.js`, `css/styles.css`
+
+### Update 28: The DriveLab title opens the Practice form
+
+**Problem with the previous version:** The DriveLab title in the top-left was a link to `#practice`, which only changed the address bar and did not change the page.
+
+**How it was fixed (simple):** Clicking the DriveLab title now always opens the Practice form page, for guests and administrators.
+
+**How it was fixed (technical detail):** `init()` binds a click handler on `.brand` that prevents the default link behaviour and calls `setRoute("practice")`, the same path the sidebar navigation uses (so the active navigation highlight updates too). The link keeps its `href` so it still works as a normal link and is announced as "DriveLab: go to the Practice form".
+
+**Files affected:** `js/app.js`, `index.html`
+
+### Update 29: Phone-width layout no longer scrolls sideways for administrators
+
+**Problem with the previous version:** On screens narrower than about 800 px, the administrator's extra navigation buttons widened the whole page, so every page could be scrolled sideways.
+
+**How it was fixed (technical detail):** In the `max-width: 980px` layout, `.app-shell` uses `grid-template-columns: minmax(0, 1fr)` instead of `1fr`, so the navigation row scrolls inside itself as intended instead of stretching the page.
+
+**Files affected:** `css/styles.css`

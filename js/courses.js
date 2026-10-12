@@ -29,6 +29,7 @@ const groupOf = (key) =>
 const hasLaps = (group) => group === "speed"; // only Speed driving courses have a Lap 1 and a Lap 2 path
 
 // One colour per feature, used by the pictures AND the key so they always match.
+// (Walls and the background are also recoloured by CSS in dark mode through the course-wall-fill / course-bg-fill classes.)
 export const COLORS = {
 	wall: "#263c49",
 	start: "#1fa355",
@@ -241,7 +242,7 @@ export function courseSvg(model, label = "Course layout", group = "speed") {
 			rects += `<rect x="${start}" y="${r}" width="${c - start}" height="1"/>`;
 		}
 	}
-	return `<svg class="course-svg" viewBox="0 0 ${COURSE_COLS} ${COURSE_ROWS}" role="img" aria-label="${esc(label)}" preserveAspectRatio="xMidYMid meet"><rect width="${COURSE_COLS}" height="${COURSE_ROWS}" fill="${COLORS.background}"/><g fill="${COLORS.wall}" shape-rendering="crispEdges">${rects}</g>${overlayInner(model, group)}</svg>`;
+	return `<svg class="course-svg" viewBox="0 0 ${COURSE_COLS} ${COURSE_ROWS}" role="img" aria-label="${esc(label)}" preserveAspectRatio="xMidYMid meet"><rect class="course-bg-fill" width="${COURSE_COLS}" height="${COURSE_ROWS}" fill="${COLORS.background}"/><g class="course-wall-fill" fill="${COLORS.wall}" shape-rendering="crispEdges">${rects}</g>${overlayInner(model, group)}</svg>`;
 }
 
 // ---------------------------------------------------------------- the key
@@ -251,7 +252,7 @@ const ARROW = (color, extra = "") =>
 const KEY = {
 	wall: {
 		label: "Wall",
-		icon: `<rect x="8" y="3" width="16" height="16" rx="1.5" fill="${COLORS.wall}"/>`,
+		icon: `<rect class="course-wall-fill" x="8" y="3" width="16" height="16" rx="1.5" fill="${COLORS.wall}"/>`,
 	},
 	start: {
 		label: "Starting position",
@@ -488,7 +489,7 @@ const TOOL_INFO = {
 };
 const toolIcon = (tool) =>
 	({
-		draw: `<svg viewBox="0 0 22 22" width="20" height="20"><rect x="3" y="3" width="16" height="16" rx="2" fill="${COLORS.wall}"/></svg>`,
+		draw: `<svg viewBox="0 0 22 22" width="20" height="20"><rect class="course-wall-fill" x="3" y="3" width="16" height="16" rx="2" fill="${COLORS.wall}"/></svg>`,
 		erase: `<svg viewBox="0 0 22 22" width="20" height="20"><rect x="3" y="3" width="16" height="16" rx="2" fill="#fff" stroke="#8aa0ad" stroke-width="2" stroke-dasharray="3 2"/></svg>`,
 		start: `<svg viewBox="0 0 22 22" width="20" height="20"><circle cx="11" cy="11" r="8" fill="${COLORS.start}"/></svg>`,
 		end: `<svg viewBox="0 0 22 22" width="20" height="20"><rect x="3" y="3" width="16" height="16" rx="2" fill="${COLORS.end}"/></svg>`,

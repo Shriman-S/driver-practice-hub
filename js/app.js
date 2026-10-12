@@ -31,6 +31,7 @@ import {
 	customReport,
 } from "./customforms.js";
 import { downloadReport } from "./pdf.js";
+import { facetEquationsHtml, allEquationsHtml } from "./formulas.js";
 
 // Application state stays in one small object; all HTML below is generated from trusted app data, never raw user HTML.
 const state = {
@@ -83,13 +84,17 @@ function toast(message) {
 	document.body.append(n);
 	setTimeout(() => n.remove(), 3500);
 }
+// Pages that only an administrator may open (the Firestore rules protect the data itself).
+const ADMIN_ROUTES = ["analysis", "course-builder", "forms", "admin"];
+const ROUTE_KEY = "drivelab-route";
 function setRoute(route) {
 	if (
-		["analysis", "course-builder", "forms", "admin"].includes(route) &&
+		ADMIN_ROUTES.includes(route) &&
 		!state.session.isAdmin
 	)
 		return openAdmin();
 	state.route = route;
+	sessionStorage.setItem(ROUTE_KEY, route); // so a refresh reopens the same page
 	document
 		.querySelectorAll(".nav-link")
 		.forEach((x) => x.classList.toggle("active", x.dataset.route === route));
@@ -259,7 +264,8 @@ function analysisGeneral(submissions) {
 			.join("") || '<div class="empty">No rankings yet.</div>'
 	}</aside></div>
   <section class="panel" style="margin-top:18px"><div class="panel-heading"><div><h3>How the overall score works</h3><p>Coverage first: finishing more facets always outranks excelling at fewer.</p></div></div><div class="table-wrap"><table style="min-width:420px"><thead><tr><th>Facets completed</th><th>Possible overall score</th></tr></thead><tbody><tr><td>1</td><td>0.00 – 2.49</td></tr><tr><td>2</td><td>2.50 – 4.99</td></tr><tr><td>3</td><td>5.00 – 7.49</td></tr><tr><td>4</td><td>7.51 – 10.00</td></tr></tbody></table></div><p class="legend">Within the same number of completed facets, the completed facet scores are averaged equally. A driver's score in each facet is their most recent attempt there.</p></section>
-  <section class="panel" style="margin-top:18px"><div class="panel-heading"><div><h3>All recorded attempts</h3><p>Most recent first. Deleting an attempt removes it from every analysis view.</p></div></div>${attemptsTable(submissions, null)}</section>`;
+  <section class="panel" style="margin-top:18px"><div class="panel-heading"><div><h3>All recorded attempts</h3><p>Most recent first. Deleting an attempt removes it from every analysis view.</p></div></div>${attemptsTable(submissions, null)}</section>
+  ${allEquationsHtml(Object.fromEntries(FACET_KEYS.map((k) => [k, FACETS[k].label])))}`;
 }
 
 function analysisFacet(facet, submissions) {
@@ -291,7 +297,8 @@ function analysisFacet(facet, submissions) {
 		: `<tr><td colspan="7" class="empty">No attempts for this facet.</td></tr>`;
 	return `<div class="metrics">${metricTile("Attempts", s.attempts)}${metricTile("Drivers", s.drivers)}${metricTile("Average score", s.attempts ? score2(s.average) : "--")}${metricTile("Best score", s.best ? `${score2(s.best.score.final)}<small style="font-size:12px;color:var(--muted);font-weight:500"> ${esc(s.best.driverName)}</small>` : "--", true)}</div>
   <section class="panel analysis-panel" style="margin-bottom:18px"><div class="panel-heading"><div><h3>${FACETS[facet].label} standings</h3><p>Ranked by latest attempt, which is the score that counts toward a driver's overall ranking.</p></div></div><div class="table-wrap"><table><thead><tr><th>Rank</th><th>Driver</th><th>Grade</th><th>Attempts</th><th>Latest</th><th>Best</th><th>Average</th></tr></thead><tbody>${table}</tbody></table></div></section>
-  <section class="panel"><div class="panel-heading"><div><h3>${FACETS[facet].label} attempts</h3><p>Most recent first. Raw values are kept with each calculated score. Deleting an attempt removes it from every analysis view.</p></div></div>${attemptsTable(s.list, facet)}</section>`;
+  <section class="panel"><div class="panel-heading"><div><h3>${FACETS[facet].label} attempts</h3><p>Most recent first. Raw values are kept with each calculated score. Deleting an attempt removes it from every analysis view.</p></div></div>${attemptsTable(s.list, facet)}</section>
+  ${facetEquationsHtml(facet, FACETS[facet].label)}`;
 }
 
 // Hooks for the Analysis tab: view dropdown, export button, and the per-row Delete buttons.
@@ -572,6 +579,29 @@ function openDeleteAttempt(id) {
 		}
 	};
 }
+// ---------------------------------------------------------------- Calendar times
+// Times are saved as 24-hour "HH:MM" text (what <input type="time"> produces) and always DISPLAYED in 12-hour form.
+// Events saved before start/end times existed have a single `time`, which is treated as the start time.
+function time12(value) {
+	const match = /^(\d{1,2}):(\d{2})/.exec(value || "");
+	if (!match) return "";
+	const hours = Number(match[1]);
+	return `${hours % 12 || 12}:${match[2]} ${hours < 12 ? "AM" : "PM"}`;
+}
+const eventStart = (e) => e.startTime || e.time || "";
+function eventTimeText(e) {
+	const start = time12(eventStart(e)),
+		end = time12(e.endTime);
+	if (start && end) return `${start} – ${end}`;
+	return start || (end ? `Ends ${end}` : "");
+}
+// A day's events in time order; events with no time come last.
+const eventsOn = (day) =>
+	state.data.events
+		.filter((e) => e.date === day)
+		.sort((a, b) =>
+			(eventStart(a) || "99").localeCompare(eventStart(b) || "99"),
+		);
 function renderCalendar() {
 	const m = state.month,
 		first = new Date(m.getFullYear(), m.getMonth(), 1),
@@ -585,8 +615,13 @@ function renderCalendar() {
 	return `${pageHeader("Practice calendar", "Everyone can see the calendar. Administrators can schedule, revise, and remove events.", state.session.isAdmin ? '<button class="button" id="add-event">Add practice</button>' : "")}<section class="panel calendar"><div class="calendar-head"><button class="button button-secondary button-small" data-month="-1">← Previous</button><h2>${new Intl.DateTimeFormat(undefined, { month: "long", year: "numeric" }).format(m)}</h2><button class="button button-secondary button-small" data-month="1">Next →</button></div><div class="calendar-grid">${["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((x) => `<div class="day-name">${x}</div>`).join("")}${days
 		.map((d) => {
 			const key = dateKey(d),
-				events = state.data.events.filter((e) => e.date === key);
-			return `<div class="calendar-cell ${d.getMonth() !== m.getMonth() ? "muted" : ""}" data-day="${key}"><span class="day-num">${d.getDate()}</span>${events.map((e) => `<div class="event-pill" title="${esc(e.description || e.title)}">${esc(e.title)} ${esc(e.time || "")}</div>`).join("")}</div>`;
+				events = eventsOn(key);
+			return `<div class="calendar-cell ${d.getMonth() !== m.getMonth() ? "muted" : ""}" data-day="${key}"><span class="day-num">${d.getDate()}</span>${events
+				.map((e) => {
+					const when = eventTimeText(e);
+					return `<div class="event-pill" title="${esc([e.title, when, e.description].filter(Boolean).join("\n"))}">${when ? `<span class="event-time">${esc(when)}</span>` : ""}<span class="event-title">${esc(e.title)}</span></div>`;
+				})
+				.join("")}</div>`;
 		})
 		.join("")}</div></section>`;
 }
@@ -915,20 +950,39 @@ function updateAccount() {
 		: "Administrator sign in";
 }
 function openEvent() {
-	content.innerHTML = `<div class="modal-head"><h2>Schedule practice</h2><button class="close" id="close-modal">×</button></div><form id="event-form"><div class="field">${field("event-title", "Title", "text", true)}</div><div class="field-grid">${field("event-date", "Date", "date", true)}${field("event-time", "Time", "time", false)}</div><div class="field"><label>Description</label><textarea id="event-description" maxlength="500"></textarea></div><div class="form-actions"><button class="button" type="submit">Save event</button></div></form>`;
+	content.innerHTML = `<div class="modal-head"><h2>Schedule practice</h2><button class="close" id="close-modal">×</button></div><form id="event-form" class="event-form">${field("event-title", "Title", "text", true)}${field("event-date", "Date", "date", true)}<div><div class="field-grid">${field("event-start", "Start time", "time", false)}${field("event-end", "End time", "time", false)}</div><p class="help event-time-help">Both times are optional and are shown in 12-hour format (for example 4:00 PM - 6:00 PM). An end time needs a start time.</p><p class="event-time-error" id="event-time-error" role="alert" hidden></p></div><div class="field"><label for="event-description">Description</label><textarea id="event-description" maxlength="500"></textarea></div><div class="form-actions"><button class="button" type="submit">Save event</button></div></form>`;
 	modal.showModal();
 	document.querySelector("#close-modal").onclick = () => modal.close();
 	document.querySelector("#event-form").onsubmit = async (e) => {
 		e.preventDefault();
 		const f = new FormData(e.currentTarget),
-			item = {
-				id: uid(),
-				title: f.get("event-title"),
-				date: f.get("event-date"),
-				time: f.get("event-time"),
-				description: document.querySelector("#event-description").value,
-			};
-		await store.saveRecord("events", item);
+			startTime = f.get("event-start") || "",
+			endTime = f.get("event-end") || "";
+		const error = document.querySelector("#event-time-error");
+		// "HH:MM" strings compare correctly as text, so a plain comparison checks that the end is after the start.
+		const problem =
+			endTime && !startTime
+				? "Add a start time, or clear the end time."
+				: startTime && endTime && endTime <= startTime
+					? "The end time must be later than the start time."
+					: "";
+		error.textContent = problem;
+		error.hidden = !problem;
+		if (problem) return;
+		const item = {
+			id: uid(),
+			title: f.get("event-title"),
+			date: f.get("event-date"),
+			startTime,
+			endTime,
+			description: document.querySelector("#event-description").value,
+		};
+		try {
+			await store.saveRecord("events", item);
+		} catch (err) {
+			toast(`Could not save the event: ${err.message}`);
+			return;
+		}
 		state.data.events.push(item);
 		modal.close();
 		render();
@@ -936,8 +990,8 @@ function openEvent() {
 	};
 }
 function showDay(day) {
-	const events = state.data.events.filter((x) => x.date === day);
-	content.innerHTML = `<div class="modal-head"><h2>${dateText(day)}</h2><button class="close" id="close-modal">×</button></div>${events.length ? events.map((e) => `<div class="custom-item"><span><strong>${esc(e.title)} ${esc(e.time || "")}</strong><br><small>${esc(e.description || "No description.")}</small></span>${state.session.isAdmin ? `<button class="button button-danger button-small" data-remove-event="${e.id}">Remove</button>` : ""}</div>`).join("") : "<p>No scheduled practice.</p>"}`;
+	const events = eventsOn(day);
+	content.innerHTML = `<div class="modal-head"><h2>${dateText(day)}</h2><button class="close" id="close-modal">×</button></div>${events.length ? events.map((e) => `<div class="custom-item"><span><strong>${esc(e.title)}</strong>${eventTimeText(e) ? `<br><span class="event-when">${esc(eventTimeText(e))}</span>` : ""}<br><small>${esc(e.description || "No description.")}</small></span>${state.session.isAdmin ? `<button class="button button-danger button-small" data-remove-event="${e.id}">Remove</button>` : ""}</div>`).join("") : "<p>No scheduled practice.</p>"}`;
 	modal.showModal();
 	document.querySelector("#close-modal").onclick = () => modal.close();
 	document.querySelectorAll("[data-remove-event]").forEach(
@@ -967,6 +1021,39 @@ function updateStatus() {
 			`Firestore denied public reads of: ${warnings.join(", ")}. Publish the current firestore.rules so guests can see forms and courses.`,
 		);
 }
+// ---------------------------------------------------------------- Light / dark mode
+// The choice is saved in this browser (localStorage). With no saved choice the site follows the device's setting.
+// index.html applies the saved theme before the page is drawn, so there is no flash of the wrong colors.
+const THEME_KEY = "drivelab-theme";
+const currentTheme = () =>
+	document.documentElement.dataset.theme === "dark" ? "dark" : "light";
+function applyTheme(theme) {
+	document.documentElement.dataset.theme = theme;
+	const button = document.querySelector("#theme-toggle");
+	if (!button) return;
+	const dark = theme === "dark";
+	button.setAttribute("aria-pressed", String(dark));
+	button.title = dark ? "Switch to light mode" : "Switch to dark mode";
+	button.querySelector(".theme-label").textContent = dark
+		? "Light mode"
+		: "Dark mode";
+}
+function bindThemeToggle() {
+	applyTheme(currentTheme());
+	document.querySelector("#theme-toggle").onclick = () => {
+		const next = currentTheme() === "dark" ? "light" : "dark";
+		try {
+			localStorage.setItem(THEME_KEY, next);
+		} catch {
+			/* storage blocked: the theme still changes for this visit */
+		}
+		applyTheme(next);
+	};
+	// Follow a change in the device's setting, unless the person has picked a theme on this site.
+	window.matchMedia?.("(prefers-color-scheme: dark)").addEventListener?.("change", (e) => {
+		if (!localStorage.getItem(THEME_KEY)) applyTheme(e.matches ? "dark" : "light");
+	});
+}
 async function init() {
 	// Bind navigation and the sign-in button FIRST. They need no network, so the page stays usable
 	// (and an administrator can still reach the sign-in dialog) even if Firebase setup fails below.
@@ -976,12 +1063,25 @@ async function init() {
 	// While signed in as an administrator this same button becomes "Log out".
 	document.querySelector("#admin-button").onclick = () =>
 		state.session.isAdmin ? logout() : openAdmin();
+	// The DriveLab title always goes to the Practice form page.
+	document.querySelector(".brand").onclick = (e) => {
+		e.preventDefault();
+		setRoute("practice");
+	};
+	bindThemeToggle();
 	try {
 		state.session = await store.initializeStorage();
 		state.data = await store.loadAll();
 		updateStatus();
 		updateAccount();
-		render();
+		// Reopen the page this tab was on before a refresh (an administrator page only if the administrator session was restored).
+		const saved = sessionStorage.getItem(ROUTE_KEY);
+		const known = saved && document.querySelector(`.nav-link[data-route="${saved}"]`);
+		setRoute(
+			known && (state.session.isAdmin || !ADMIN_ROUTES.includes(saved))
+				? saved
+				: "practice",
+		);
 	} catch (error) {
 		console.error(error);
 		document.querySelector("#connection-status").textContent =

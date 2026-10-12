@@ -27,16 +27,34 @@ export async function initializeStorage() {
 	const firebaseApp = app.initializeApp(firebaseConfig);
 	const firebaseAuth = auth.getAuth(firebaseApp);
 	const db = firestore.getFirestore(firebaseApp);
-	await auth.signInAnonymously(firebaseAuth); // Public recorders receive a non-identifying account that can create, not read, submissions.
-	remote = {
-		auth,
-		firestore,
-		firebaseAuth,
-		db,
-		user: firebaseAuth.currentUser,
-		admin: false,
-	};
-	return { mode: "firebase", user: remote.user, isAdmin: false };
+	// Keep the signed-in account in this tab's sessionStorage: it survives a page refresh but is erased when the tab is closed,
+	// so an administrator stays signed in on refresh and is signed out by closing the tab (or pressing Log out).
+	await auth.setPersistence(firebaseAuth, auth.browserSessionPersistence);
+	// Wait until Firebase has restored any account saved for this tab before deciding who the visitor is.
+	await firebaseAuth.authStateReady();
+	remote = { auth, firestore, firebaseAuth, db, user: null, admin: false };
+	const saved = firebaseAuth.currentUser;
+	if (saved && !saved.isAnonymous) {
+		// A Google account from earlier in this tab: restore the administrator session if it is still on the allow-list.
+		remote.admin = await checkAdmin(saved.uid);
+		if (remote.admin) remote.user = saved;
+		else await auth.signOut(firebaseAuth); // no longer an administrator: fall back to a guest identity below
+	} else if (saved) remote.user = saved; // reuse this tab's guest identity
+	if (!remote.user) await ensureGuest(); // Public recorders receive a non-identifying account that can create, not read, submissions.
+	return { mode: "firebase", user: remote.user, isAdmin: remote.admin };
+}
+// The rules let an account read its own `admins` document only if it is already an administrator,
+// so for everyone else this read is rejected with "permission-denied". Treat that as "not an administrator".
+async function checkAdmin(uid) {
+	try {
+		const admin = await remote.firestore.getDoc(
+			remote.firestore.doc(remote.db, "admins", uid),
+		);
+		return admin.exists();
+	} catch (error) {
+		if (error.code !== "permission-denied") throw error;
+		return false;
+	}
 }
 export async function signInAdmin() {
 	if (!remote)
@@ -48,18 +66,18 @@ export async function signInAdmin() {
 		provider,
 	);
 	remote.user = result.user;
-	// The rules let an account read its own `admins` document only if it is already an administrator,
-	// so for everyone else this read is rejected with "permission-denied". Treat that as "not an administrator".
-	try {
-		const admin = await remote.firestore.getDoc(
-			remote.firestore.doc(remote.db, "admins", result.user.uid),
-		);
-		remote.admin = admin.exists();
-	} catch (error) {
-		if (error.code !== "permission-denied") throw error;
-		remote.admin = false;
+	remote.admin = await checkAdmin(result.user.uid);
+	if (!remote.admin) {
+		// Not on the allow-list: do not keep that Google account signed in for this tab; return to a guest identity.
+		await remote.auth.signOut(remote.firebaseAuth);
+		remote.user = null;
+		try {
+			await ensureGuest();
+		} catch {
+			/* recreated before the next submission */
+		}
 	}
-	return { user: result.user, isAdmin: remote.admin };
+	return { user: remote.user, isAdmin: remote.admin };
 }
 // Ends the administrator session and returns to a guest (anonymous) identity so the person can keep recording practices.
 export async function signOutAdmin() {

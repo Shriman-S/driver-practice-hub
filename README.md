@@ -12,13 +12,17 @@ DriveLab is a no-cost, GitHub Pages-ready FRC driver-practice tracker. It is des
   - The most recent name is remembered only in the current browser, reducing repetitive typing without publishing a list of students.
 - **Administrator-only analysis**
   - A spreadsheet-style facet table, score bars, and coverage-first leaderboard compare drivers while keeping raw submissions unreadable to regular users.
+  - The Analysis page shows the scoring equations for the overall ranking and every facet, each with a short explanation of why it was chosen.
+  - An administrator stays signed in when the page is refreshed, and is signed out by **Log out** or by closing the tab.
 - **Courses and Course builder**
   - Everyone can view the published course layouts on the **Courses** page (three layouts each for speed, shared defense/offense, and shooting). Administrators also get Edit, Create, and Delete there.
   - Administrators draw a course on the **Course builder** page by clicking and dragging across a 48 x 24 grid; cells fill as the pointer moves. There is an Erase tool (or hold Shift), Undo, and Clear walls.
   - They can also place a green **start** circle and a red **end** square, and trace a **robot path** (arrows show the direction to drive). Speed driving courses can have a separate Lap 1 and Lap 2 path, with a numbered circle where each lap begins and a bar where it ends.
   - Every course shows a **key** listing only the features that course uses, with the matching symbols and colors.
 - **Practice calendar**
-  - Anyone can browse month-by-month events; administrators can schedule or remove events and descriptions.
+  - Anyone can browse month-by-month events; administrators can schedule or remove events with a description and an optional start and end time. Times are shown in 12-hour format (for example 4:00 PM - 6:30 PM).
+- **Dark mode**
+  - Everyone can switch between light and dark mode with the button in the top bar. The choice is remembered in that browser; before a choice is made, the site follows the device setting.
 - **Download PDF**
   - The Analysis page's **Download PDF** button downloads a formatted, dated report of the selected view (general statistics, one drill, or one custom form): a portrait summary page followed by landscape pages for the leaderboard and attempts spreadsheet. It uses the free, MIT-licensed jsPDF libraries bundled in `js/vendor/`, so no paid service or internet connection is needed.
 - **Form builder (custom forms)**
@@ -64,6 +68,7 @@ Do not treat the local preview, a GitHub repository, or a hidden front-end tab a
 | `js/formbuilder.js` | The administrator's Form builder editor. |
 | `js/courses.js` | Course grid painter, Courses page, and course pictures. |
 | `js/pdf.js` | Formatted PDF report builder. |
+| `js/formulas.js` | Scoring equations and explanations shown on the Analysis page (the calculations themselves are in `scoring.js`). |
 | `js/vendor/` | Bundled jsPDF and jsPDF-AutoTable (MIT licensed) used only by the PDF export. |
 | `firestore.rules` | Server-enforced access rules for student information. |
 
