@@ -550,3 +550,33 @@ While editing, a **live preview** shows exactly what the Analysis page will say.
 - **Testing.** Simulated end to end: exporting November, re-exporting, and exporting November plus December created each event exactly once. A non-DriveLab event was never touched, the clean-up removed only the deleted practice's copy, and 250 events were sent in 3 requests. Non-administrator, anonymous, forged, and missing tokens were all refused.
 
 **Files affected:** `google-apps-script/DriveLabCalendarSync.gs` (new), `js/gcal.js`, `js/storage.js`, `js/app.js`, `README.md`
+
+### Update 36: Warning about multiple Google accounts during the sync-script setup
+
+**Problem with the previous version:** Being signed in to more than one Google account in the same browser makes Apps Script authorization and deployment fail with Google Drive's "Sorry, unable to open the file at this time". Google's Apps Script documentation says signing in to several accounts at once is not supported. The setup steps did not mention this.
+
+**How it was fixed (simple):** The one-time setup on the Practice calendar page now opens with a notice. It says to do Parts A to C in a private (Incognito) window, signed in only as the team calendar's owner. No code behavior changed. The website's export is not affected, because DriveLab's requests to the sync link do not carry the browser's Google cookies.
+
+**Files affected:** `js/gcal.js`
+
+### Update 37: Saving and deleting stopped working ("store.saveRecord is not a function")
+
+**Problem with the previous version:** In Update 35, an edit to `js/storage.js` cut off the end of the file. That deleted five storage functions: `addSubmission`, `saveRecord`, `removeRecord`, `saveCourse`, and `removeCourse`. Every action that saves or deletes data failed with a "... is not a function" error:
+
+- adding or removing a calendar event;
+- submitting a practice;
+- deleting an attempt;
+- saving or deleting a course;
+- saving or deleting a custom form.
+
+The site still loaded and displayed data, because loading and the new settings and export functions were intact. The tests run for Update 35 only covered the export, so the problem was missed.
+
+**How it was fixed (simple):** The five functions were restored exactly as they were before. Nothing about how data is saved, and no saved data, was changed.
+
+**How it was fixed (technical detail):**
+
+- The five functions were copied back from the last correct version. A comparison confirms they are identical to the originals apart from one blank line.
+- A check was run over every module: every `import { ... }` refers to a function its file exports, and every `store.<name>(...)` call matches a function `storage.js` exports. No problems remain.
+- A browser test now exercises every save and delete path: add event, remove event, submit practice, delete attempt, save course, and save scoring settings. All of them succeed and are written to storage. The earlier calendar, scoring, and export tests still pass.
+
+**Files affected:** `js/storage.js`

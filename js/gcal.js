@@ -210,6 +210,7 @@ export function exportInstructionsHtml({ syncUrl = "", lastExport = null, fireba
     <details class="export-steps" ${syncUrl ? "" : "open"}>
       <summary>One-time setup (about 10 minutes, on a computer)</summary>
       <p class="help">Do Parts A to C signed in with the Google account that <strong>owns the team Google Calendar</strong>. Exported practices are added by that account. Part D can be done by any DriveLab administrator.</p>
+      <p class="notice"><strong>Important:</strong> Apps Script does not support being signed in to more than one Google account in the same browser. If you are, Google shows "Sorry, unable to open the file at this time" while authorizing or deploying. Do Parts A to C in a private window (Chrome: <strong>⋮ → New Incognito window</strong>, or Ctrl+Shift+N / ⌘+Shift+N) signed in <strong>only</strong> as the calendar owner.</p>
       <h4>Part A: Copy the team calendar's Calendar ID</h4>
       <ol>
         <li>Open <a href="https://calendar.google.com/" target="_blank" rel="noopener">Google Calendar</a> on a computer (the phone app does not show Calendar IDs).</li>

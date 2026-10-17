@@ -181,6 +181,63 @@ export async function saveSetting(id, value) {
 	await remote.firestore.setDoc(remote.firestore.doc(remote.db, "settings", id), clean);
 }
 
+export async function addSubmission(item) {
+	if (!remote) {
+		database.submissions.push(item);
+		saveLocal();
+		return;
+	}
+	await ensureGuest();
+	// setDoc with an explicit id (instead of addDoc's random one) keeps the document id equal to item.id, so what is on screen can be deleted by id.
+	await remote.firestore.setDoc(
+		remote.firestore.doc(remote.db, "submissions", item.id),
+		{ ...item, userId: remote.user.uid },
+	);
+}
+export async function saveRecord(type, item) {
+	if (!remote) {
+		const list = database[type];
+		const index = list.findIndex((x) => x.id === item.id);
+		index < 0 ? list.push(item) : (list[index] = item);
+		saveLocal();
+		return;
+	}
+	await remote.firestore.setDoc(
+		remote.firestore.doc(remote.db, type, item.id),
+		item,
+	);
+}
+export async function removeRecord(type, id) {
+	if (!remote) {
+		database[type] = database[type].filter((x) => x.id !== id);
+		saveLocal();
+		return;
+	}
+	await remote.firestore.deleteDoc(remote.firestore.doc(remote.db, type, id));
+}
+export async function saveCourse(id, item) {
+	if (!remote) {
+		database.courses[id] = item;
+		saveLocal();
+		return;
+	}
+	await remote.firestore.setDoc(
+		remote.firestore.doc(remote.db, "courses", id),
+		item,
+	);
+}
+// Deletes one course layout. (Courses are stored as an object keyed by id locally, unlike the other record lists.)
+export async function removeCourse(id) {
+	if (!remote) {
+		delete database.courses[id];
+		saveLocal();
+		return;
+	}
+	await remote.firestore.deleteDoc(
+		remote.firestore.doc(remote.db, "courses", id),
+	);
+}
+
 // ---------------------------------------------------------------- Practice calendar export (see gcal.js)
 // The export is sent to the team's Google Apps Script sync link together with the administrator's Firebase ID token. The script
 // proves the sender is an administrator by reading admins/<uid> in Firestore with that token (the rules allow that only for
