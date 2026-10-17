@@ -2,12 +2,13 @@ import { firebaseConfig, firebaseEnabled } from "./config.js";
 
 // This adapter provides a functional browser-only preview, then switches to protected shared storage after Firebase setup.
 const KEY = "drivelab-preview-v1";
-const empty = { submissions: [], events: [], courses: {}, customForms: [] };
+const empty = { submissions: [], events: [], courses: {}, customForms: [], settings: {} };
 let database = structuredClone(empty);
 let remote = null;
 const readLocal = () => {
 	try {
-		return JSON.parse(localStorage.getItem(KEY)) || structuredClone(empty);
+		// Spread over `empty` so data saved by an older version (without `settings`) still has every list.
+		return { ...structuredClone(empty), ...(JSON.parse(localStorage.getItem(KEY)) || {}) };
 	} catch {
 		return structuredClone(empty);
 	}
@@ -128,11 +129,29 @@ export async function loadAll() {
 			return null;
 		}
 	};
-	const [events, courses, forms, submissions] = await Promise.all([
+	// Settings are single documents in the `settings` collection (read one by one, because guests may read only `scoring`):
+	//   scoring          - the scoring settings (everyone: a guest's on-the-spot score must use the current rules)
+	//   scoringExamples  - the example attempts on the Scoring settings page (administrators only)
+	//   calendarExport   - the team Google Calendar ID and the last export summary (administrators only)
+	const setting = async (id, allowed = true) => {
+		if (!allowed) return null;
+		try {
+			const snap = await f.getDoc(f.doc(db, "settings", id));
+			return snap.exists() ? snap.data() : null;
+		} catch (error) {
+			if (error.code !== "permission-denied") throw error;
+			loadWarnings.push(`settings/${id}`);
+			return null;
+		}
+	};
+	const [events, courses, forms, submissions, scoring, scoringExamples, calendarExport] = await Promise.all([
 		read("events"),
 		read("courses"),
 		read("customForms"),
 		read("submissions", remote.admin),
+		setting("scoring"),
+		setting("scoringExamples", remote.admin),
+		setting("calendarExport", remote.admin),
 	]);
 	// `id` goes LAST so the Firestore document id always wins over any `id` field stored inside the document. Deleting uses this id,
 	// and submissions saved by older versions have an auto-generated document id that differs from their stored `id` field.
@@ -145,61 +164,31 @@ export async function loadAll() {
 			: {},
 		customForms: rows(forms),
 		submissions: rows(submissions),
+		settings: Object.fromEntries(
+			Object.entries({ scoring, scoringExamples, calendarExport }).filter(([, value]) => value),
+		),
 	};
 }
-export async function addSubmission(item) {
+// Saves one settings document (administrators only; the rules enforce it).
+export async function saveSetting(id, value) {
+	const clean = JSON.parse(JSON.stringify(value)); // strips `undefined`, which Firestore refuses to store
 	if (!remote) {
-		database.submissions.push(item);
+		database.settings ??= {};
+		database.settings[id] = clean;
 		saveLocal();
 		return;
 	}
-	await ensureGuest();
-	// setDoc with an explicit id (instead of addDoc's random one) keeps the document id equal to item.id, so what is on screen can be deleted by id.
-	await remote.firestore.setDoc(
-		remote.firestore.doc(remote.db, "submissions", item.id),
-		{ ...item, userId: remote.user.uid },
-	);
+	await remote.firestore.setDoc(remote.firestore.doc(remote.db, "settings", id), clean);
 }
-export async function saveRecord(type, item) {
-	if (!remote) {
-		const list = database[type];
-		const index = list.findIndex((x) => x.id === item.id);
-		index < 0 ? list.push(item) : (list[index] = item);
-		saveLocal();
-		return;
-	}
-	await remote.firestore.setDoc(
-		remote.firestore.doc(remote.db, type, item.id),
-		item,
-	);
+
+// ---------------------------------------------------------------- Practice calendar export (see gcal.js)
+// The export is sent to the team's Google Apps Script sync link together with the administrator's Firebase ID token. The script
+// proves the sender is an administrator by reading admins/<uid> in Firestore with that token (the rules allow that only for
+// administrators). No Google OAuth app, calendar permission pop-up, or app verification is involved.
+export function canUseGoogleCalendar() {
+	return Boolean(remote?.admin && remote.firebaseAuth.currentUser && !remote.firebaseAuth.currentUser.isAnonymous);
 }
-export async function removeRecord(type, id) {
-	if (!remote) {
-		database[type] = database[type].filter((x) => x.id !== id);
-		saveLocal();
-		return;
-	}
-	await remote.firestore.deleteDoc(remote.firestore.doc(remote.db, type, id));
-}
-export async function saveCourse(id, item) {
-	if (!remote) {
-		database.courses[id] = item;
-		saveLocal();
-		return;
-	}
-	await remote.firestore.setDoc(
-		remote.firestore.doc(remote.db, "courses", id),
-		item,
-	);
-}
-// Deletes one course layout. (Courses are stored as an object keyed by id locally, unlike the other record lists.)
-export async function removeCourse(id) {
-	if (!remote) {
-		delete database.courses[id];
-		saveLocal();
-		return;
-	}
-	await remote.firestore.deleteDoc(
-		remote.firestore.doc(remote.db, "courses", id),
-	);
+export async function getIdToken() {
+	if (!canUseGoogleCalendar()) throw new Error("Sign in as an administrator first.");
+	return remote.firebaseAuth.currentUser.getIdToken();
 }

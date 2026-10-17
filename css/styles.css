@@ -1415,3 +1415,524 @@ dialog {
 	font-weight: 700;
 	color: var(--danger);
 }
+
+/* ---- Practice calendar: columns can never be widened by their contents (the phone overflow fix) ---- */
+.calendar-grid {
+	grid-template-columns: repeat(7, minmax(0, 1fr)); /* plain 1fr has an automatic minimum, so a long event pill used to widen its column */
+}
+.calendar-cell,
+.day-name {
+	min-width: 0;
+}
+.calendar-cell:focus-visible {
+	outline: 2px solid var(--focus);
+	outline-offset: -2px;
+}
+.calendar-cell.today .day-num {
+	display: inline-grid;
+	place-items: center;
+	min-width: 22px;
+	height: 22px;
+	border-radius: 11px;
+	background: var(--accent);
+	color: #fff;
+	padding: 0 5px;
+}
+.event-pill {
+	max-width: 100%;
+	cursor: pointer;
+}
+.day-short,
+.event-dots,
+.calendar-agenda {
+	display: none;
+}
+.event-dots {
+	gap: 3px;
+	align-items: center;
+	flex-wrap: wrap;
+	margin-top: 5px;
+}
+.event-dots i {
+	width: 7px;
+	height: 7px;
+	border-radius: 50%;
+	background: var(--blue);
+	display: block;
+}
+.event-dots b {
+	font-size: 9px;
+	color: var(--blue);
+	line-height: 1;
+}
+.calendar-agenda {
+	margin-top: 14px;
+	padding: 16px;
+}
+.calendar-agenda h3 {
+	margin: 0 0 10px;
+	font-size: 15px;
+}
+.calendar-agenda ul {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+	display: grid;
+	gap: 8px;
+}
+.agenda-item {
+	width: 100%;
+	display: grid;
+	grid-template-columns: 44px minmax(0, 1fr) auto;
+	gap: 12px;
+	align-items: center;
+	text-align: left;
+	border: 1px solid var(--line);
+	border-radius: 9px;
+	background: var(--section-bg);
+	color: var(--ink);
+	padding: 9px 11px;
+	font: inherit;
+	cursor: pointer;
+}
+.agenda-item:hover {
+	border-color: var(--blue);
+}
+.agenda-date {
+	display: grid;
+	justify-items: center;
+	line-height: 1.1;
+}
+.agenda-date strong {
+	font-size: 19px;
+}
+.agenda-date small {
+	font-size: 10px;
+	text-transform: uppercase;
+	color: var(--muted);
+	font-weight: 750;
+}
+.agenda-text {
+	display: grid;
+	min-width: 0;
+}
+.agenda-text strong {
+	overflow-wrap: anywhere;
+}
+.agenda-go {
+	color: var(--muted);
+	font-size: 20px;
+}
+.event-detail {
+	gap: 12px;
+	align-items: flex-start;
+}
+.event-detail > span {
+	min-width: 0;
+	overflow-wrap: anywhere;
+}
+/* Phones: dots instead of pills, a compact grid, and the month list underneath. Tapping a day shows its events in a pop-up. */
+@media (max-width: 640px) {
+	.calendar {
+		padding: 10px;
+	}
+	.calendar-head {
+		gap: 8px;
+	}
+	.calendar-head h2 {
+		font-size: 16px;
+		text-align: center;
+	}
+	.cal-nav-text,
+	.day-long,
+	.event-pill {
+		display: none;
+	}
+	.day-short {
+		display: inline;
+	}
+	.day-name {
+		padding: 6px 0;
+		text-align: center;
+	}
+	.calendar-cell {
+		min-height: 52px;
+		padding: 4px 2px;
+		text-align: center;
+	}
+	.calendar-cell .day-num {
+		font-size: 12px;
+	}
+	.event-dots {
+		display: flex;
+		justify-content: center;
+	}
+	.calendar-cell.has-events {
+		background: var(--timer-bg);
+	}
+	.calendar-cell.muted.has-events {
+		background: var(--cell-muted-bg);
+	}
+	.calendar-agenda {
+		display: block;
+	}
+	.hero {
+		flex-wrap: wrap;
+		align-items: flex-start;
+	}
+	.hero .hero-actions {
+		width: 100%;
+	}
+	.hero .hero-actions .button {
+		flex: 1 1 auto;
+	}
+}
+
+/* ---- Practice calendar: export to the team Google Calendar (administrators) ---- */
+.export-help {
+	margin-top: 18px;
+}
+.export-body {
+	padding: 0 21px 21px;
+	display: grid;
+	gap: 12px;
+}
+.export-body code,
+.notice code {
+	overflow-wrap: anywhere;
+}
+.export-steps {
+	border: 1px solid var(--line);
+	border-radius: 10px;
+	background: var(--section-bg);
+	padding: 12px 16px;
+}
+.export-steps summary {
+	cursor: pointer;
+	font-weight: 750;
+}
+.export-steps ol {
+	margin: 12px 0 6px;
+	padding-left: 22px;
+	display: grid;
+	gap: 8px;
+	font-size: 14px;
+	line-height: 1.5;
+}
+.export-steps a {
+	color: var(--blue);
+}
+.gcal-status {
+	padding: 12px 14px;
+	border-radius: 8px;
+	background: var(--timer-bg);
+	border: 1px solid var(--timer-line);
+	font-size: 13px;
+	line-height: 1.5;
+	overflow-wrap: anywhere;
+}
+.gcal-status.ok {
+	background: var(--desc-bg);
+	border-color: var(--green);
+}
+.gcal-status.bad {
+	background: var(--error-bg);
+	border-color: var(--error-line);
+	color: var(--error-ink);
+}
+.gcal-status ul {
+	margin: 6px 0;
+	padding-left: 20px;
+}
+.gcal-status a {
+	color: var(--blue);
+	font-weight: 700;
+}
+.bad-text {
+	color: var(--danger);
+	font-weight: 700;
+}
+.gcal-actions {
+	flex-wrap: wrap;
+}
+
+/* ---- Scoring settings page ---- */
+.sc-actions {
+	align-items: center;
+}
+.sc-dirty {
+	font-size: 12px;
+	font-weight: 750;
+	color: var(--notice-ink);
+	background: var(--notice-bg);
+	border: 1px solid var(--notice-line);
+	border-radius: 999px;
+	padding: 4px 10px;
+}
+.sc-tabs {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+	margin: 0 0 16px;
+}
+.sc-tab {
+	border: 1px solid var(--line);
+	background: var(--panel);
+	color: var(--ink);
+	border-radius: 999px;
+	padding: 8px 14px;
+	font: 700 13px inherit;
+	font-family: inherit;
+	cursor: pointer;
+}
+.sc-tab:hover {
+	border-color: var(--accent);
+}
+.sc-tab.active {
+	background: var(--active-bg);
+	color: var(--active-ink);
+	border-color: var(--active-bg);
+}
+.sc-layout {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+	gap: 18px;
+	align-items: start;
+}
+.sc-body {
+	padding: 0 21px 21px;
+	display: grid;
+	gap: 14px;
+}
+.sc-comp {
+	border: 1px solid var(--line);
+	border-radius: 10px;
+	padding: 14px 16px;
+	background: var(--section-bg);
+}
+.sc-comp-head {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	margin-bottom: 10px;
+}
+.sc-symbol {
+	font: italic 600 16px "Cambria Math", Cambria, "Times New Roman", serif;
+	color: var(--accent);
+}
+.sc-weight {
+	display: grid;
+	grid-template-columns: auto minmax(0, 1fr) 80px auto;
+	gap: 10px;
+	align-items: center;
+}
+.sc-weight-label,
+.sc-unit {
+	font-size: 12px;
+	font-weight: 750;
+	color: var(--desc-ink);
+}
+.sc-weight input[type="range"] {
+	padding: 0;
+	border: 0;
+	background: transparent;
+	accent-color: var(--accent);
+}
+.sc-grid {
+	display: grid;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	gap: 12px 14px;
+	margin-top: 12px;
+}
+.sc-grid .b-field {
+	margin-bottom: 0;
+}
+.sc-grid .sc-wide {
+	grid-column: 1 / -1;
+}
+.sc-facet-weight {
+	display: grid;
+	gap: 4px;
+	margin-top: 10px;
+}
+.sc-facet-weight > span {
+	font-size: 13px;
+	font-weight: 700;
+}
+.sc-total-row {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 10px;
+	align-items: center;
+}
+.sc-total {
+	font-weight: 800;
+	font-size: 14px;
+	margin-right: auto;
+}
+.sc-total.ok {
+	color: var(--green);
+}
+.sc-total.bad {
+	color: var(--danger);
+}
+.sc-methods {
+	border: 0;
+	padding: 0;
+	margin: 0;
+	display: grid;
+	gap: 8px;
+}
+.sc-methods legend {
+	font-size: 12px;
+	font-weight: 700;
+	color: var(--desc-ink);
+	margin-bottom: 6px;
+}
+.sc-method {
+	display: grid;
+	grid-template-columns: auto minmax(0, 1fr);
+	gap: 10px;
+	align-items: start;
+	border: 1px solid var(--line);
+	border-radius: 9px;
+	padding: 11px 13px;
+	cursor: pointer;
+	background: var(--panel);
+}
+.sc-method.selected {
+	border-color: var(--accent);
+	box-shadow: 0 0 0 2px var(--accent-ring);
+}
+.sc-method input {
+	width: auto;
+	margin-top: 3px;
+}
+.sc-method strong {
+	display: block;
+	font-size: 14px;
+}
+.sc-method small {
+	color: var(--muted);
+	font-size: 12px;
+}
+.sc-preview .eq-body {
+	display: grid;
+	gap: 12px;
+}
+.sc-sub {
+	margin: 4px 0 0;
+	font-size: 13px;
+}
+.sc-examples {
+	margin-top: 18px;
+}
+.sc-examples .panel-heading {
+	gap: 12px;
+	flex-wrap: wrap;
+}
+.sc-examples-body {
+	padding: 0 21px 21px;
+}
+.sc-table input {
+	padding: 6px 8px;
+	font-size: 13px;
+	min-width: 64px;
+}
+.sc-table .sc-label-input {
+	min-width: 170px;
+}
+.sc-table th.sc-part,
+.sc-table td.sc-part-val {
+	color: var(--muted);
+	font-variant-numeric: tabular-nums;
+}
+.sc-table td {
+	font-variant-numeric: tabular-nums;
+	white-space: nowrap;
+}
+.sc-table td.sc-new {
+	background: var(--desc-bg);
+}
+.sc-delta.up {
+	color: var(--green);
+	font-weight: 750;
+}
+.sc-delta.down {
+	color: var(--danger);
+	font-weight: 750;
+}
+.sc-legend {
+	margin: 10px 0 0;
+	display: block;
+}
+.sc-impact {
+	margin: 0 0 10px;
+	font-size: 14px;
+}
+.sr-only {
+	position: absolute;
+	width: 1px;
+	height: 1px;
+	overflow: hidden;
+	clip: rect(0 0 0 0);
+	white-space: nowrap;
+}
+/* Analysis equations: the auto-generated change list, design notes, and method name. */
+.eq-changes {
+	background: var(--notice-bg);
+	border: 1px solid var(--notice-line);
+	color: var(--notice-ink);
+	border-radius: 9px;
+	padding: 11px 14px;
+	font-size: 13px;
+	margin-bottom: 14px;
+}
+.eq-changes p {
+	margin: 0;
+}
+.eq-changes ul {
+	margin: 6px 0 0;
+	padding-left: 20px;
+}
+.eq-design {
+	margin: 6px 0 0;
+	font-size: 12px;
+	line-height: 1.5;
+	color: var(--muted);
+}
+.eq-method {
+	font-size: 11px;
+	font-weight: 700;
+	color: var(--muted);
+	margin-left: 6px;
+}
+@media (max-width: 1100px) {
+	.sc-layout {
+		grid-template-columns: minmax(0, 1fr);
+	}
+}
+@media (max-width: 580px) {
+	.sc-weight {
+		grid-template-columns: minmax(0, 1fr) 72px auto;
+	}
+	.sc-weight-label {
+		grid-column: 1 / -1;
+	}
+	.sc-grid {
+		grid-template-columns: minmax(0, 1fr);
+	}
+	.sc-body,
+	.sc-examples-body,
+	.export-body {
+		padding: 0 14px 14px;
+	}
+}
+.export-steps h4 {
+	margin: 16px 0 0;
+	font-size: 14px;
+}
+.export-steps > .help {
+	margin: 10px 0 0;
+	display: block;
+}

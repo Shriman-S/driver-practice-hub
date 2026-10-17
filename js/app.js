@@ -1,5 +1,11 @@
 import { FACETS, GRADES, OBSERVATIONS } from "./constants.js";
-import { scoreSubmission, driverSummary } from "./scoring.js";
+import {
+	scoreSubmission,
+	driverSummary,
+	normalizeScoring,
+	OVERALL_METHODS,
+	ATTEMPT_RULES,
+} from "./scoring.js";
 import * as store from "./storage.js";
 import {
 	esc,
@@ -31,7 +37,28 @@ import {
 	customReport,
 } from "./customforms.js";
 import { downloadReport } from "./pdf.js";
-import { facetEquationsHtml, allEquationsHtml } from "./formulas.js";
+import {
+	facetEquationsHtml,
+	allEquationsHtml,
+	bandsTableHtml,
+	overallLegend,
+	overallPdfLines,
+} from "./formulas.js";
+import {
+	renderScoringEditor,
+	bindScoringEditor,
+	scoringIsDirty,
+	resetScoringDraft,
+} from "./scoringeditor.js";
+import {
+	exportDialogHtml,
+	exportInstructionsHtml,
+	exportViaScript,
+	isSyncUrl,
+	downloadIcs,
+	upcomingOnly,
+	SETTINGS_ID as CALENDAR_SETTINGS_ID,
+} from "./gcal.js";
 
 // Application state stays in one small object; all HTML below is generated from trusted app data, never raw user HTML.
 const state = {
@@ -46,7 +73,12 @@ const state = {
 	formErrors: [],
 	formDirty: false,
 	formFocus: null,
-	data: { submissions: [], events: [], courses: {}, customForms: [] },
+	// Scoring settings in use (scoring.js). The Scoring settings page edits a copy in scoringDraft until it is saved.
+	scoring: normalizeScoring(null),
+	scoringDraft: null,
+	scoringTab: "overall",
+	scoringDirty: false,
+	data: { submissions: [], events: [], courses: {}, customForms: [], settings: {} },
 	session: { mode: "local", isAdmin: false },
 	month: new Date(new Date().getFullYear(), new Date().getMonth(), 1),
 	timer: null,
@@ -66,6 +98,7 @@ const ctx = {
 	pageHeader,
 	render: () => render(),
 	setRoute: (route) => setRoute(route),
+	applyScoring: (cfg) => applyScoring(cfg),
 	// Opens the shared dialog; `wide` gives forms and course pictures more room.
 	openModal: ({ wide = false } = {}) => {
 		modal.classList.toggle("wide", wide);
@@ -85,7 +118,7 @@ function toast(message) {
 	setTimeout(() => n.remove(), 3500);
 }
 // Pages that only an administrator may open (the Firestore rules protect the data itself).
-const ADMIN_ROUTES = ["analysis", "course-builder", "forms", "admin"];
+const ADMIN_ROUTES = ["analysis", "scoring", "course-builder", "forms", "admin"];
 const ROUTE_KEY = "drivelab-route";
 function setRoute(route) {
 	if (
@@ -93,6 +126,11 @@ function setRoute(route) {
 		!state.session.isAdmin
 	)
 		return openAdmin();
+	// Leaving the Scoring settings page with unsaved changes asks first; the draft is dropped once the page is left.
+	if (state.route === "scoring" && route !== "scoring") {
+		if (scoringIsDirty(state) && !confirm("You have unsaved scoring changes. Leave this page and discard them?")) return;
+		resetScoringDraft(state);
+	}
 	state.route = route;
 	sessionStorage.setItem(ROUTE_KEY, route); // so a refresh reopens the same page
 	document
@@ -159,6 +197,22 @@ const mean = (list) =>
 const score2 = (n) => Number(n).toFixed(2);
 const newestFirst = (a, b) => b.createdAt.localeCompare(a.createdAt);
 
+// ---------------------------------------------------------------- scoring settings in use
+// Every built-in attempt is re-scored from its raw answers with the current scoring settings whenever data is loaded or the
+// settings are saved, so the leaderboard, statistics, PDF, and the equations on the Analysis page always agree. (The score saved
+// with each attempt at submission time is not changed in the database.) Custom-form attempts keep their ranking-question value.
+function applyScoring(cfg = state.scoring) {
+	state.scoring = cfg;
+	state.data.submissions = state.data.submissions.map((x) =>
+		FACET_KEYS.includes(x.facet) ? { ...x, score: scoreSubmission(x, cfg) } : x,
+	);
+}
+async function loadData() {
+	state.data = await store.loadAll();
+	state.data.settings ??= {};
+	applyScoring(normalizeScoring(state.data.settings.scoring));
+}
+
 // One row per driver using the coverage-first summary (see scoring.js). The grade shown is from the driver's most recent attempt.
 function driverRows(submissions) {
 	const grouped = {};
@@ -167,7 +221,7 @@ function driverRows(submissions) {
 		.map(([name, entries]) => ({
 			name,
 			grade: [...entries].sort(newestFirst)[0].grade,
-			...driverSummary(entries),
+			...driverSummary(entries, state.scoring),
 		}))
 		.sort((a, b) => b.overall - a.overall);
 }
@@ -228,7 +282,7 @@ function renderAnalysis() {
 	const options = `<option value="general" ${view === "general" ? "selected" : ""}>General statistics (all facets)</option>${FACET_KEYS.map((k) => `<option value="${k}" ${view === k ? "selected" : ""}>${FACETS[k].label}</option>`).join("")}${forms.length ? `<optgroup label="Custom forms">${forms.map((f) => `<option value="${esc(formFacet(f.id))}" ${view === formFacet(f.id) ? "selected" : ""}>${esc(f.title)}</option>`).join("")}</optgroup>` : ""}`;
 	const picker = `<div class="hero-actions"><label class="view-picker"><span>View</span><select id="analysis-view">${options}</select></label><button class="button" id="export-pdf">Download PDF</button></div>`;
 	if (view === "general")
-		return `${pageHeader("Analysis", "General statistics across all four facets. Completing more facets always ranks above an incomplete skill profile.", picker)}${analysisGeneral(builtInSubmissions())}`;
+		return `${pageHeader("Analysis", `General statistics across all four facets. Ranking method: ${esc(OVERALL_METHODS[state.scoring.overall.method].label)}. ${esc(OVERALL_METHODS[state.scoring.overall.method].help)}`, picker)}${analysisGeneral(builtInSubmissions())}`;
 	if (isCustomFacet(view)) {
 		const form = forms.find((f) => formFacet(f.id) === view);
 		return `${pageHeader("Analysis", `${esc(form.title)}: standings, question summaries, and every recorded attempt. Choose General statistics for the overall leaderboard.`, picker)}${customAnalysisHtml(form, state.data.submissions)}`;
@@ -253,7 +307,7 @@ function analysisGeneral(submissions) {
 		: `<tr><td colspan="9" class="empty">No practice records yet. Submitted records will appear here for administrators.</td></tr>`;
 	return `<div class="metrics">${metricTile("Recorded attempts", submissions.length)}${metricTile("Drivers assessed", rows.length)}${metricTile("Top overall score", rows[0] ? rows[0].overall.toFixed(2) : "--", true)}${metricTile("Completed all four facets", full)}</div>
   <section class="panel analysis-panel" style="margin-bottom:18px"><div class="panel-heading"><div><h3>Statistics by facet</h3><p>Every recorded attempt, scores out of 10.</p></div></div><div class="table-wrap"><table><thead><tr><th>Facet</th><th>Attempts</th><th>Drivers</th><th>Average score</th><th>Best score</th></tr></thead><tbody>${overview}</tbody></table></div></section>
-  <div class="analysis-layout" style="grid-template-columns:1fr"><section class="panel analysis-panel"><div class="panel-heading"><div><h3>Driver leaderboard</h3><p>Latest score in each completed facet; scores are out of 10.</p></div></div><div class="table-wrap"><table><thead><tr><th>Rank</th><th>Driver</th><th>Grade</th><th>Facets</th><th>Speed</th><th>Defense</th><th>Offense</th><th>Shooting</th><th>Overall</th></tr></thead><tbody>${board}</tbody></table></div><p class="legend">Overall = 2.5 × (completed facets − 1) + 0.249 × average of the completed facet scores, plus 0.01 when all four are complete.</p></section>
+  <div class="analysis-layout" style="grid-template-columns:1fr"><section class="panel analysis-panel"><div class="panel-heading"><div><h3>Driver leaderboard</h3><p>Each facet shows the driver's ${esc(ATTEMPT_RULES[state.scoring.overall.attempt].short)}; scores are out of 10.</p></div></div><div class="table-wrap"><table><thead><tr><th>Rank</th><th>Driver</th><th>Grade</th><th>Facets</th><th>Speed</th><th>Defense</th><th>Offense</th><th>Shooting</th><th>Overall</th></tr></thead><tbody>${board}</tbody></table></div><p class="legend">${esc(overallLegend(state.scoring))}</p></section>
   <aside class="panel leaderboard"><h3 style="margin-top:0">Top performers</h3>${
 		rows
 			.slice(0, 5)
@@ -263,9 +317,9 @@ function analysisGeneral(submissions) {
 			)
 			.join("") || '<div class="empty">No rankings yet.</div>'
 	}</aside></div>
-  <section class="panel" style="margin-top:18px"><div class="panel-heading"><div><h3>How the overall score works</h3><p>Coverage first: finishing more facets always outranks excelling at fewer.</p></div></div><div class="table-wrap"><table style="min-width:420px"><thead><tr><th>Facets completed</th><th>Possible overall score</th></tr></thead><tbody><tr><td>1</td><td>0.00 – 2.49</td></tr><tr><td>2</td><td>2.50 – 4.99</td></tr><tr><td>3</td><td>5.00 – 7.49</td></tr><tr><td>4</td><td>7.51 – 10.00</td></tr></tbody></table></div><p class="legend">Within the same number of completed facets, the completed facet scores are averaged equally. A driver's score in each facet is their most recent attempt there.</p></section>
+  <section class="panel" style="margin-top:18px"><div class="panel-heading"><div><h3>How the overall score works</h3><p>${esc(OVERALL_METHODS[state.scoring.overall.method].label)}: ${esc(OVERALL_METHODS[state.scoring.overall.method].help)}</p></div></div>${bandsTableHtml(state.scoring)}<p class="legend">${esc(overallLegend(state.scoring))} The full equations are in Scoring equations below.</p></section>
   <section class="panel" style="margin-top:18px"><div class="panel-heading"><div><h3>All recorded attempts</h3><p>Most recent first. Deleting an attempt removes it from every analysis view.</p></div></div>${attemptsTable(submissions, null)}</section>
-  ${allEquationsHtml(Object.fromEntries(FACET_KEYS.map((k) => [k, FACETS[k].label])))}`;
+  ${allEquationsHtml(Object.fromEntries(FACET_KEYS.map((k) => [k, FACETS[k].label])), state.scoring)}`;
 }
 
 function analysisFacet(facet, submissions) {
@@ -296,9 +350,9 @@ function analysisFacet(facet, submissions) {
 				.join("")
 		: `<tr><td colspan="7" class="empty">No attempts for this facet.</td></tr>`;
 	return `<div class="metrics">${metricTile("Attempts", s.attempts)}${metricTile("Drivers", s.drivers)}${metricTile("Average score", s.attempts ? score2(s.average) : "--")}${metricTile("Best score", s.best ? `${score2(s.best.score.final)}<small style="font-size:12px;color:var(--muted);font-weight:500"> ${esc(s.best.driverName)}</small>` : "--", true)}</div>
-  <section class="panel analysis-panel" style="margin-bottom:18px"><div class="panel-heading"><div><h3>${FACETS[facet].label} standings</h3><p>Ranked by latest attempt, which is the score that counts toward a driver's overall ranking.</p></div></div><div class="table-wrap"><table><thead><tr><th>Rank</th><th>Driver</th><th>Grade</th><th>Attempts</th><th>Latest</th><th>Best</th><th>Average</th></tr></thead><tbody>${table}</tbody></table></div></section>
+  <section class="panel analysis-panel" style="margin-bottom:18px"><div class="panel-heading"><div><h3>${FACETS[facet].label} standings</h3><p>Ranked by latest attempt. The overall ranking uses each driver's ${esc(ATTEMPT_RULES[state.scoring.overall.attempt].short)} in this facet.</p></div></div><div class="table-wrap"><table><thead><tr><th>Rank</th><th>Driver</th><th>Grade</th><th>Attempts</th><th>Latest</th><th>Best</th><th>Average</th></tr></thead><tbody>${table}</tbody></table></div></section>
   <section class="panel"><div class="panel-heading"><div><h3>${FACETS[facet].label} attempts</h3><p>Most recent first. Raw values are kept with each calculated score. Deleting an attempt removes it from every analysis view.</p></div></div>${attemptsTable(s.list, facet)}</section>
-  ${facetEquationsHtml(facet, FACETS[facet].label)}`;
+  ${facetEquationsHtml(facet, FACETS[facet].label, state.scoring)}`;
 }
 
 // Hooks for the Analysis tab: view dropdown, export button, and the per-row Delete buttons.
@@ -362,15 +416,11 @@ function generalReport() {
 				type: "text",
 				title: "How the overall score works",
 				orientation: "portrait",
-				lines: [
-					"Overall = 2.5 x (completed facets - 1) + 0.249 x average of the completed facet scores, plus 0.01 when all four facets are complete.",
-					"Score bands: 1 facet = 0.00-2.49 | 2 facets = 2.50-4.99 | 3 facets = 5.00-7.49 | 4 facets = 7.51-10.00.",
-					"A driver's score in each facet is their most recent attempt there. Completing more facets always ranks above completing fewer.",
-				],
+				lines: overallPdfLines(state.scoring), // generated from the current scoring settings
 			},
 			{
 				title: "Driver leaderboard",
-				note: "Latest score in each completed facet; scores are out of 10.",
+				note: `Each facet shows the driver's ${ATTEMPT_RULES[state.scoring.overall.attempt].short}; scores are out of 10.`,
 				orientation: "landscape",
 				nowrap: [0, 1, 2, 3, 4, 5, 6, 7, 8],
 				align: [
@@ -474,7 +524,7 @@ function facetReport(facet) {
 		blocks: [
 			{
 				title: `${FACETS[facet].label} standings`,
-				note: "Ranked by latest attempt, which is the score that counts toward a driver's overall ranking.",
+				note: `Ranked by latest attempt. The overall ranking uses each driver's ${ATTEMPT_RULES[state.scoring.overall.attempt].short} in this facet.`,
 				orientation: "portrait",
 				nowrap: [0, 3, 4, 5, 6],
 				head: [
@@ -602,6 +652,9 @@ const eventsOn = (day) =>
 		.sort((a, b) =>
 			(eventStart(a) || "99").localeCompare(eventStart(b) || "99"),
 		);
+// Monthly grid. On wide screens each event is a pill with its time and title. On phone-width screens the pills are replaced by
+// small dots (so a busy day can never widen its column and push the calendar off the screen), and tapping a day opens a pop-up
+// with every event's full details. A list of the month's practices under the grid gives phones a readable agenda as well.
 function renderCalendar() {
 	const m = state.month,
 		first = new Date(m.getFullYear(), m.getMonth(), 1),
@@ -612,18 +665,48 @@ function renderCalendar() {
 		d.setDate(start.getDate() + i);
 		return d;
 	});
-	return `${pageHeader("Practice calendar", "Everyone can see the calendar. Administrators can schedule, revise, and remove events.", state.session.isAdmin ? '<button class="button" id="add-event">Add practice</button>' : "")}<section class="panel calendar"><div class="calendar-head"><button class="button button-secondary button-small" data-month="-1">← Previous</button><h2>${new Intl.DateTimeFormat(undefined, { month: "long", year: "numeric" }).format(m)}</h2><button class="button button-secondary button-small" data-month="1">Next →</button></div><div class="calendar-grid">${["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((x) => `<div class="day-name">${x}</div>`).join("")}${days
+	const admin = state.session.isAdmin;
+	const monthName = new Intl.DateTimeFormat(undefined, { month: "long", year: "numeric" }).format(m);
+	const actions = admin
+		? '<div class="hero-actions"><button class="button button-secondary" id="export-gcal">Export to Team Google Calendar</button><button class="button" id="add-event">Add practice</button></div>'
+		: "";
+	const monthKey = `${m.getFullYear()}-${pad2(m.getMonth() + 1)}`;
+	const monthEvents = state.data.events
+		.filter((e) => String(e.date).startsWith(monthKey))
+		.sort((a, b) => a.date.localeCompare(b.date) || (eventStart(a) || "99").localeCompare(eventStart(b) || "99"));
+	const agenda = `<section class="panel calendar-agenda" aria-label="Practices in ${esc(monthName)}"><h3>Practices in ${esc(monthName)}</h3>${
+		monthEvents.length
+			? `<ul>${monthEvents
+					.map(
+						(e) =>
+							`<li><button type="button" class="agenda-item" data-event="${esc(e.id)}"><span class="agenda-date"><strong>${parseDay(e.date).getDate()}</strong><small>${new Intl.DateTimeFormat(undefined, { weekday: "short" }).format(parseDay(e.date))}</small></span><span class="agenda-text"><strong>${esc(e.title)}</strong>${eventTimeText(e) ? `<span class="event-when">${esc(eventTimeText(e))}</span>` : ""}</span><span class="agenda-go" aria-hidden="true">›</span></button></li>`,
+					)
+					.join("")}</ul>`
+			: '<p class="help">No practices are scheduled this month.</p>'
+	}</section>`;
+	const exportHelp = admin
+		? exportInstructionsHtml({
+				syncUrl: state.data.settings?.calendarExport?.syncUrl || "",
+				lastExport: state.data.settings?.calendarExport?.lastExport || null,
+				firebase: store.isRemote(),
+			})
+		: "";
+	return `${pageHeader("Practice calendar", "Everyone can see the calendar. Administrators can schedule, revise, and remove events.", actions)}<section class="panel calendar"><div class="calendar-head"><button class="button button-secondary button-small" data-month="-1" aria-label="Previous month">← <span class="cal-nav-text">Previous</span></button><h2>${esc(monthName)}</h2><button class="button button-secondary button-small" data-month="1" aria-label="Next month"><span class="cal-nav-text">Next</span> →</button></div><div class="calendar-grid">${["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((x) => `<div class="day-name"><span class="day-long">${x}</span><span class="day-short" aria-hidden="true">${x[0]}</span></div>`).join("")}${days
 		.map((d) => {
 			const key = dateKey(d),
 				events = eventsOn(key);
-			return `<div class="calendar-cell ${d.getMonth() !== m.getMonth() ? "muted" : ""}" data-day="${key}"><span class="day-num">${d.getDate()}</span>${events
+			const label = `${dateText(key)}${events.length ? `, ${events.length} event${events.length === 1 ? "" : "s"}` : ""}`;
+			return `<div class="calendar-cell ${d.getMonth() !== m.getMonth() ? "muted" : ""} ${key === todayKey() ? "today" : ""} ${events.length ? "has-events" : ""}" data-day="${key}" role="button" tabindex="0" aria-label="${esc(label)}"><span class="day-num">${d.getDate()}</span>${events
 				.map((e) => {
 					const when = eventTimeText(e);
 					return `<div class="event-pill" title="${esc([e.title, when, e.description].filter(Boolean).join("\n"))}">${when ? `<span class="event-time">${esc(when)}</span>` : ""}<span class="event-title">${esc(e.title)}</span></div>`;
 				})
-				.join("")}</div>`;
+				.join("")}${events.length ? `<span class="event-dots" aria-hidden="true">${events
+				.slice(0, 3)
+				.map(() => "<i></i>")
+				.join("")}${events.length > 3 ? `<b>+${events.length - 3}</b>` : ""}</span>` : ""}</div>`;
 		})
-		.join("")}</div></section>`;
+		.join("")}</div></section>${agenda}${exportHelp}`;
 }
 function renderCourses() {
 	return renderCourseGallery(ctx);
@@ -641,6 +724,7 @@ function render() {
 	const views = {
 		practice: renderPractice,
 		analysis: renderAnalysis,
+		scoring: () => renderScoringEditor(ctx),
 		calendar: renderCalendar,
 		courses: renderCourses,
 		"course-builder": renderCourseBuilderPage,
@@ -650,6 +734,7 @@ function render() {
 	document.querySelector("#page-title").textContent = {
 		practice: "Practice form",
 		analysis: "Analysis",
+		scoring: "Scoring settings",
 		calendar: "Practice calendar",
 		courses: "Courses",
 		"course-builder": "Course builder",
@@ -679,6 +764,7 @@ function bindView() {
 		}
 	}
 	if (state.route === "analysis") bindAnalysis();
+	if (state.route === "scoring") bindScoringEditor(ctx);
 	if (state.route === "calendar") {
 		document.querySelectorAll("[data-month]").forEach(
 			(b) =>
@@ -690,9 +776,19 @@ function bindView() {
 				}),
 		);
 		document.querySelector("#add-event")?.addEventListener("click", openEvent);
+		document.querySelector("#export-gcal")?.addEventListener("click", openExport);
+		document.querySelectorAll("[data-day]").forEach((c) => {
+			c.onclick = () => showDay(c.dataset.day);
+			c.onkeydown = (e) => {
+				if (e.key === "Enter" || e.key === " ") {
+					e.preventDefault();
+					showDay(c.dataset.day);
+				}
+			};
+		});
 		document
-			.querySelectorAll("[data-day]")
-			.forEach((c) => (c.onclick = () => showDay(c.dataset.day)));
+			.querySelectorAll("[data-event]")
+			.forEach((b) => (b.onclick = () => showEvent(b.dataset.event)));
 	}
 	if (state.route === "courses") bindCourseGallery(ctx);
 	if (state.route === "course-builder") bindCourseBuilder(ctx);
@@ -884,7 +980,7 @@ async function submitPractice(e) {
 		data: d,
 		createdAt: now(),
 	};
-	item.score = scoreSubmission(item);
+	item.score = scoreSubmission(item, state.scoring); // the current scoring settings (read by everyone)
 	try {
 		await store.addSubmission(item);
 		state.data.submissions.push(item);
@@ -913,7 +1009,7 @@ function openAdmin() {
 						"This Google account is not on the administrator allow-list.",
 					);
 				state.session = s;
-				state.data = await store.loadAll();
+				await loadData();
 				updateStatus();
 				updateAccount();
 				modal.close();
@@ -928,7 +1024,7 @@ function openAdmin() {
 async function logout() {
 	try {
 		state.session = await store.signOutAdmin();
-		state.data = await store.loadAll();
+		await loadData();
 		updateStatus(); // reloaded as a guest: only public data comes back (calendar, courses, forms)
 	} catch (err) {
 		toast(`Could not log out: ${err.message}`);
@@ -989,22 +1085,125 @@ function openEvent() {
 		toast("Practice scheduled.");
 	};
 }
-function showDay(day) {
-	const events = eventsOn(day);
-	content.innerHTML = `<div class="modal-head"><h2>${dateText(day)}</h2><button class="close" id="close-modal">×</button></div>${events.length ? events.map((e) => `<div class="custom-item"><span><strong>${esc(e.title)}</strong>${eventTimeText(e) ? `<br><span class="event-when">${esc(eventTimeText(e))}</span>` : ""}<br><small>${esc(e.description || "No description.")}</small></span>${state.session.isAdmin ? `<button class="button button-danger button-small" data-remove-event="${e.id}">Remove</button>` : ""}</div>`).join("") : "<p>No scheduled practice.</p>"}`;
+// Pop-up with the full details of every event on one day (or of a single event, from the month list).
+function eventDetailHtml(e) {
+	return `<div class="custom-item event-detail"><span><strong>${esc(e.title)}</strong>${eventTimeText(e) ? `<br><span class="event-when">${esc(eventTimeText(e))}</span>` : '<br><span class="event-when">All day</span>'}<br><small>${esc(e.description || "No description.")}</small></span>${state.session.isAdmin ? `<button class="button button-danger button-small" data-remove-event="${esc(e.id)}">Remove</button>` : ""}</div>`;
+}
+function showDay(day, onlyId = null) {
+	const events = eventsOn(day).filter((e) => !onlyId || e.id === onlyId);
+	content.innerHTML = `<div class="modal-head"><h2>${dateText(day)}</h2><button class="close" id="close-modal" aria-label="Close">×</button></div>${events.length ? events.map(eventDetailHtml).join("") : "<p>No scheduled practice.</p>"}`;
 	modal.showModal();
 	document.querySelector("#close-modal").onclick = () => modal.close();
 	document.querySelectorAll("[data-remove-event]").forEach(
 		(b) =>
 			(b.onclick = async () => {
-				await store.removeRecord("events", b.dataset.removeEvent);
+				b.disabled = true;
+				try {
+					await store.removeRecord("events", b.dataset.removeEvent);
+				} catch (err) {
+					b.disabled = false;
+					toast(`Could not remove the event: ${err.message}`);
+					return;
+				}
 				state.data.events = state.data.events.filter(
 					(x) => x.id !== b.dataset.removeEvent,
 				);
 				modal.close();
 				render();
+				toast("Practice removed.");
 			}),
 	);
+}
+function showEvent(id) {
+	const e = state.data.events.find((x) => x.id === id);
+	if (e) showDay(e.date, id);
+}
+
+// ---------------------------------------------------------------- Export to the team Google Calendar (administrators; see gcal.js)
+function openExport() {
+	if (!state.session.isAdmin) return;
+	const saved = state.data.settings?.calendarExport || {};
+	const all = state.data.events;
+	const google = store.canUseGoogleCalendar();
+	content.innerHTML = exportDialogHtml({
+		syncUrl: saved.syncUrl || "",
+		count: all.length,
+		upcoming: upcomingOnly(all).length,
+		firebase: google,
+	});
+	ctx.openModal();
+	const form = document.querySelector("#gcal-form"),
+		status = document.querySelector("#gcal-status"),
+		go = document.querySelector("#gcal-go");
+	const selected = () => (document.querySelector("#gcal-upcoming").checked ? upcomingOnly(all) : [...all]);
+	const say = (html, kind = "") => {
+		status.hidden = false;
+		status.className = `gcal-status ${kind}`;
+		status.innerHTML = html;
+	};
+	let finished = false;
+	document.querySelector("#close-modal").onclick = () => modal.close();
+	modal.addEventListener("close", () => finished && state.route === "calendar" && render(), { once: true });
+	document.querySelector("#gcal-ics").onclick = () => {
+		const events = selected();
+		if (!events.length) return say("There are no practices to put in the file.", "bad");
+		downloadIcs(events);
+		say(`Downloaded a file with ${events.length} practice${events.length === 1 ? "" : "s"}. In Google Calendar open <strong>Settings → Import &amp; export</strong>, choose the file, set <strong>Add to calendar</strong> to the team calendar, and press <strong>Import</strong>. Practices that are already there are skipped.`, "ok");
+	};
+	form.onsubmit = async (e) => {
+		e.preventDefault();
+		if (!google) return;
+		const syncUrl = document.querySelector("#gcal-url").value.trim();
+		if (!isSyncUrl(syncUrl))
+			return say("Paste the Web app URL from the one-time setup (Part C). It starts with https://script.google.com/macros/s/ and ends in /exec.", "bad");
+		const events = selected();
+		const removeDeleted = document.querySelector("#gcal-remove").checked;
+		if (!events.length && !removeDeleted) return say("There are no practices to export.", "bad");
+		go.disabled = true;
+		try {
+			say(`Exporting… 0 of ${events.length}`);
+			const idToken = await store.getIdToken();
+			const result = await exportViaScript({
+				url: syncUrl,
+				idToken,
+				events,
+				allEvents: all,
+				removeDeleted,
+				onProgress: (done, total) => say(`Exporting… ${done} of ${total}`),
+			});
+			const record = {
+				syncUrl,
+				calendarName: result.calendar.name,
+				lastExport: {
+					at: now(),
+					calendarName: result.calendar.name,
+					added: result.added,
+					skipped: result.skipped,
+					failed: result.failed.length,
+					removed: result.removed,
+				},
+			};
+			state.data.settings = { ...(state.data.settings || {}), [CALENDAR_SETTINGS_ID]: record };
+			try {
+				await store.saveSetting(CALENDAR_SETTINGS_ID, record);
+			} catch (err) {
+				console.warn("Could not save the export summary", err);
+			}
+			finished = true;
+			say(
+				`<strong>Done: exported to “${esc(result.calendar.name || "the team calendar")}”.</strong><br>${result.added} new practice${result.added === 1 ? "" : "s"} added · ${result.skipped} already in Google Calendar (skipped, not duplicated)${removeDeleted ? ` · ${result.removed} removed` : ""}${result.failed.length ? ` · <span class="bad-text">${result.failed.length} failed</span>` : ""}.${result.failed.length ? `<ul>${result.failed
+							.slice(0, 5)
+							.map((f) => `<li>${esc(f.event.title)}${f.event.date ? ` (${esc(dateText(f.event.date))})` : ""}: ${esc(f.message)}</li>`)
+							.join("")}</ul>` : ""}<br><a href="https://calendar.google.com/calendar/r" target="_blank" rel="noopener">Open Google Calendar</a>`,
+				result.failed.length ? "bad" : "ok",
+			);
+			go.textContent = "Export again";
+		} catch (err) {
+			say(esc(err.message), "bad");
+		} finally {
+			go.disabled = false;
+		}
+	};
 }
 
 // Sidebar status. If the deployed Firestore rules are older than this version, forms and courses cannot be read by guests; say so.
@@ -1071,7 +1270,7 @@ async function init() {
 	bindThemeToggle();
 	try {
 		state.session = await store.initializeStorage();
-		state.data = await store.loadAll();
+		await loadData();
 		updateStatus();
 		updateAccount();
 		// Reopen the page this tab was on before a refresh (an administrator page only if the administrator session was restored).

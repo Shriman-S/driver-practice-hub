@@ -452,3 +452,101 @@ Every course now has a **key** that lists only the features that course actually
 **How it was fixed (technical detail):** In the `max-width: 980px` layout, `.app-shell` uses `grid-template-columns: minmax(0, 1fr)` instead of `1fr`, so the navigation row scrolls inside itself as intended instead of stretching the page.
 
 **Files affected:** `css/styles.css`
+
+### Update 30: Practice calendar fits phone screens (events become dots)
+
+**Problem with the previous version:** On phone-width screens, a day with an event widened its whole column to fit the event's text, which pushed the calendar to the right and often off the screen. With one long event title on a 390 px wide phone, the page measured 916 px wide.
+
+**How it was fixed (simple):** The seven day columns now always share the screen width equally, whatever is inside them. On phones (640 px wide or less), events are shown as small dots in the day (up to three, then "+N"), days with events are tinted, and the weekday names shorten to one letter. Tapping a day opens a pop-up with the full details of every event that day (title, time or "All day", and description; administrators also see Remove). A list of the month's practices appears under the calendar on phones; tapping one opens its details. Wide screens keep the existing pills. Today's date is highlighted, and days can be opened with the keyboard.
+
+**How it was fixed (technical detail):**
+
+- Root cause: `.calendar-grid` used `grid-template-columns: repeat(7, 1fr)`. A `1fr` track has an automatic minimum width equal to its content's minimum width, and the event pills use `white-space: nowrap`, so one long title set that minimum. The grid now uses `repeat(7, minmax(0, 1fr))`, and cells and day names have `min-width: 0`.
+- `renderCalendar()` renders both the pills and an `.event-dots` group for every day; CSS shows one or the other by screen width, so nothing is re-rendered on resize. Cells have `role="button"`, `tabindex="0"`, an `aria-label` with the date and number of events, and Enter / Space open the pop-up.
+- `showDay(day, onlyId)` lists a day's events (or one event, used by the month list through `showEvent(id)`); Remove now reports an error instead of failing silently.
+- Verified at 360 px and 390 px (page width equals screen width, no sideways scrolling) and on desktop, in light and dark mode.
+
+**Files affected:** `js/app.js`, `css/styles.css`
+
+### Update 31: Scoring settings page for administrators
+
+**Problem with the previous version:** Every weight and benchmark was fixed in `scoring.js`, so changing how drivers are scored meant editing code, and the Analysis page's explanations had to be rewritten by hand to match.
+
+**How it was fixed (simple):** A new administrator-only **Scoring settings** page has a tab for General statistics and for each drill. Administrators use controls, not formulas:
+
+- Every part of every drill has a **weight** (slider and box; the weights must add up to 100%, and a button rescales them).
+- Measured counts and times have **Full marks (10) at** and **Zero points at** values (for a time, the faster time is full marks) and a **scoring curve**: straight line, diminishing returns, or accelerating.
+- Penalties have **points lost per penalty**; lap pacing has a **strictness**; accuracy has the **accuracy needed for full marks**.
+- General statistics has the **ranking method** (coverage first, average of completed facets, or missing facets count as zero), **which attempt counts** (most recent, best, or average of all), and the **facet weights**.
+
+While editing, a **live preview** shows exactly what the Analysis page will say. **Example attempts** (for each drill) and **example drivers** (for General statistics) show the score with the saved settings, the score with the new settings, and the change. They can be edited, added, removed, reset, and are saved with the settings. An **Effect on recorded** section re-scores the real attempts and leaderboard with the draft. Problems (weights not adding to 100%, equal benchmarks) are listed and block saving. Leaving the page with unsaved changes asks first. **Restore all original scoring** returns to the original DriveLab rules.
+
+**How it was fixed (technical detail):**
+
+- `scoring.js` now holds a settings model (`DEFAULT_SCORING`, `COMPONENTS`, `normalizeScoring()`, `validateScoring()`). Each facet score is a weighted sum of components of four kinds: `range` (value mapped between `zero` and `full`, with a `curve`), `pace`, `penalty`, and `accuracy`. `scoreSubmission(submission, config)` and `driverSummary(submissions, config)` take the settings; the overall step is `overallFromFacets()` and the attempt rule is `facetValue()`.
+- With the default settings, results are bit-for-bit identical to the previous code. This was checked on 200,000 random attempts and 50,000 random drivers. The linear formula keeps the original arithmetic order, and the facet average is summed in the original order, so not even a rounding edge changes.
+- Settings are stored in Firestore as `settings/scoring` (everyone may read it, so a guest's on-the-spot score uses the current rules; only administrators write) and examples as `settings/scoringExamples` (administrators only). The new `settings` rule must be published. Missing or partial settings fall back to the defaults.
+- `app.js` re-scores every built-in attempt from its raw answers with the current settings on every load and after saving (`applyScoring()`), so the leaderboard, statistics, PDFs, and equations always agree. The score saved with each attempt in the database is not changed. Custom-form attempts are unaffected.
+- New module `js/scoringeditor.js`. Inputs write straight into the draft through `data-sc` / `data-ex` paths, and only the dependent parts (totals, problems, preview, result cells, impact) are redrawn, so typing never loses focus.
+
+**Files affected:** `js/scoring.js`, `js/scoringeditor.js` (new), `js/app.js`, `js/storage.js`, `index.html`, `css/styles.css`, `firestore.rules`, `README.md`
+
+### Update 32: The Analysis page explains the current scoring automatically
+
+**Problem with the previous version:** The equations and explanations in `formulas.js` were typed by hand, so they would be wrong as soon as a weight or benchmark changed.
+
+**How it was fixed (simple):** Every equation, number, and sentence on the Analysis page is now generated from the saved scoring settings. For example, "6 scoring preventions or more earns full marks (10); none earns 0. In between, the score rises in a straight line: each scoring prevention is worth 1.67 points", or "Time carries the most weight (60%), followed by Pace and Penalties (20% each)". Worked examples are calculated by the scoring code itself. When scoring has been customised, a box lists every difference from the original scoring and when it was changed. The original design notes still appear, but only for the parts that are unchanged. The leaderboard legend, the "How the overall score works" table (score bands are computed for the chosen method), the page subtitle, and the PDF report text are all generated the same way.
+
+**How it was fixed (technical detail):** `formulas.js` exports `facetDoc()`, `facetCard()`, `overallDoc()`, `overallCard()`, `overallBands()` (minimum and maximum overall score for 1-4 facets, found by scoring every combination of facets at 0 and 10), `bandsTableHtml()`, `overallLegend()`, `overallPdfLines()`, and `changesFromDefault()`. `facetEquationsHtml()` and `allEquationsHtml()` take the settings as a parameter. The Scoring settings preview uses the same functions, so the preview and the Analysis page cannot disagree.
+
+**Files affected:** `js/formulas.js`, `js/app.js`, `css/styles.css`
+
+### Update 33: Export the Practice calendar to the team Google Calendar
+
+**Problem with the previous version:** Practices scheduled in DriveLab had to be re-typed into the team's Google Calendar.
+
+**How it was fixed (simple):** Administrators have an **Export to Team Google Calendar** button on the Practice calendar page. After a one-time setup, an export takes three clicks: the button, **Export now**, and **Allow** in Google's pop-up. The practices are added straight into the team calendar. Exporting again (for example, next month's practices) only adds practices that are not already there, so nothing is duplicated, even if a different administrator exports. The team calendar's other events are never changed or removed. An optional box removes Google copies of practices that were deleted from DriveLab, and it only touches events DriveLab created. A **Download .ics file** backup works with Google Calendar's Import with no setup. Step-by-step instructions (one-time setup, every export, and the backup method) are shown to administrators under the calendar.
+
+**How it was fixed (technical detail):**
+
+- New module `js/gcal.js`. Each DriveLab event's permanent UUID becomes a deterministic Google event id (`drivelab` + 32 hex digits, valid base32hex). `events.insert` with an id that already exists returns HTTP 409 "duplicate", which is counted as "already in Google Calendar". Events carry the private extended property `drivelab=1`, which the clean-up option uses (`privateExtendedProperty` filter) so it can only delete DriveLab-created events.
+- Times: DriveLab's plain day and `HH:MM` times are sent as wall-clock times in the team calendar's own time zone (read from the events list response). Untimed practices become all-day events, a start without an end lasts one hour, and late events roll past midnight correctly.
+- Access: `storage.getCalendarToken()` asks the signed-in administrator's Google account for the `calendar.events` scope with Firebase `reauthenticateWithPopup()` and reads the OAuth access token from the credential. No new OAuth client or secret is needed, and the token is kept only in memory and expires after about an hour. Calls go straight from the browser to the Google Calendar API, and rate-limit replies are retried with back-off. Setup errors (API not enabled, wrong Calendar ID, view-only access) produce plain-language messages pointing to the setup step.
+- The Calendar ID and a summary of the last export are stored in `settings/calendarExport` (administrators only).
+- The .ics file uses the same per-event UID every time and folds long lines (RFC 5545), so Google Calendar's Import skips practices that were already imported.
+- Tested with a simulated Google Calendar: exporting November, exporting again, then exporting November plus December created each event exactly once, an existing non-DriveLab event was never touched, and the clean-up removed only the deleted practice's copy.
+
+**Files affected:** `js/gcal.js` (new), `js/app.js`, `js/storage.js`, `css/styles.css`, `firestore.rules`, `README.md`
+
+### Update 34: Detailed one-time setup steps for the Google Calendar export
+
+**Problem with the previous version:** The one-time setup instructions on the Practice calendar page were short. They did not say where each button is in Google Cloud Console and Google Calendar.
+
+**How it was fixed (simple):** The setup is now split into Parts A to E: turn on the API, allow the calendar permission, find the Calendar ID, share the calendar with administrators, and run the first export in DriveLab. Each step names the exact button or menu and where it is on the screen.
+
+**How it was fixed (technical detail):** `exportInstructionsHtml()` in `js/gcal.js` renders the new step list. `.export-steps h4` and `.export-steps > .help` styles were added. No behavior changed.
+
+**Files affected:** `js/gcal.js`, `css/styles.css`
+
+### Update 35: Calendar export no longer needs Google Auth Platform or app verification (replaces the access method in Updates 33 and 34)
+
+**Problem with the previous version:** The export asked each administrator's Google account for the `calendar.events` permission. That meant adding the scope in Google Cloud Console's Google Auth Platform. Google then asks for the app to be submitted for verification, which requires a public privacy policy that the site does not have.
+
+**How it was fixed (simple):** The team calendar's owner now creates a small Google Apps Script once, from the file `google-apps-script/DriveLabCalendarSync.gs`. They paste the team Calendar ID into it and publish it as a web app. Its link (the "sync link") is pasted into DriveLab once. Exporting then sends the practices to that script, which adds them to the team calendar as the owner. Nothing is set up in Google Cloud Console or Google Auth Platform, no verification or privacy policy is needed, and administrators no longer see a Google pop-up or need edit access to the calendar. Every goal of the feature is unchanged: practices are added straight into the team calendar, re-exporting never duplicates them, other events are never touched, and the .ics backup still works.
+
+**How it was fixed (technical detail):**
+
+- **The script (`DriveLabCalendarSync.gs`).** It uses the Apps Script advanced Calendar service, so the Calendar API, authorization, and project are handled by Apps Script itself. The owner authorizes it once by running `setup()`; the unverified-app notice for one's own script can be passed with Advanced. `doPost()`:
+  - verifies the caller;
+  - takes a script lock, so two exports can't overlap;
+  - reads the team calendar's name and time zone;
+  - accepts at most 200 events per request;
+  - whitelists and validates each event's fields, using the id pattern `drivelab[0-9a-v]+`;
+  - inserts each event with its deterministic id, counting "already exists" as skipped;
+  - optionally runs the clean-up, limited to events with the private marker `drivelab=1`.
+- **Who may call it.** The web app link is public, so each request carries the administrator's Firebase ID token (`currentUser.getIdToken()`). The script checks the token's project (`aud`), rejects anonymous accounts, and then reads `admins/<uid>` through the Firestore REST API with that token. Firestore checks the token's signature and expiry and applies DriveLab's rules, which allow that read only for administrators. Anything other than HTTP 200 is refused with a plain message. The script can only write to the one Calendar ID written into it.
+- **The website side (`gcal.js`).** `exportViaScript()` posts batches of 100 events as `text/plain` JSON with `redirect: "follow"`, which avoids a CORS preflight that Apps Script cannot answer, and adds up the results. `isSyncUrl()` accepts only `https://script.google.com/macros/s/.../exec` links. The settings document `settings/calendarExport` now stores `syncUrl`. `storage.getCalendarToken()` and the `reauthenticateWithPopup` scope request were removed in favour of `storage.getIdToken()`.
+- **Undoing the old setup.** If the `calendar.events` scope or the Calendar API was turned on in Google Cloud Console under the previous instructions, it can be removed or left in place; DriveLab no longer uses either.
+- **Testing.** Simulated end to end: exporting November, re-exporting, and exporting November plus December created each event exactly once. A non-DriveLab event was never touched, the clean-up removed only the deleted practice's copy, and 250 events were sent in 3 requests. Non-administrator, anonymous, forged, and missing tokens were all refused.
+
+**Files affected:** `google-apps-script/DriveLabCalendarSync.gs` (new), `js/gcal.js`, `js/storage.js`, `js/app.js`, `README.md`

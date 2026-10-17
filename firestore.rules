@@ -15,6 +15,11 @@ service cloud.firestore {
     match /courses/{id} { allow read: if true; allow write: if admin(); }
     match /customForms/{id} { allow read: if true; allow write: if admin(); }
 
+    // Site settings, one document each. Everyone may read `scoring` (the scoring settings: a guest's on-the-spot score must use the
+    // same rules the Analysis page shows). The other settings documents (`scoringExamples`, the example data on the Scoring settings
+    // page, and `calendarExport`, the team Google Calendar ID and last export summary) are administrator-only. Only administrators write.
+    match /settings/{id} { allow read: if id == 'scoring' || admin(); allow write: if admin(); }
+
     // The list of administrator accounts. Only an existing administrator can see or change it.
     match /admins/{id} { allow read, write: if admin(); }
   }
