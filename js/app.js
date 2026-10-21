@@ -37,6 +37,16 @@ import {
 	customReport,
 } from "./customforms.js";
 import { downloadReport } from "./pdf.js";
+import { fieldHtml } from "./fields.js";
+import { courseLabel } from "./courses.js";
+import {
+	attemptsSectionHtml,
+	bindAttemptsSections,
+	refreshSheet,
+	openEditAttempt,
+	attemptLabelOf,
+	openContentSheet,
+} from "./attempts.js";
 import {
 	facetEquationsHtml,
 	allEquationsHtml,
@@ -176,7 +186,7 @@ function renderPractice() {
 		)
 		.join(
 			"",
-		)}</div>${custom ? customFormHtml(custom) : `<form id="practice-form" class="panel form-panel"><div class="form-header"><h3>${f.label}</h3><div class="form-intro">${blocksHtml(f.intro)}</div></div><div class="form-section"><h3>Driver information</h3><p>Who is driving, and when the practice took place.</p><div class="field-grid">${f.driverFields.map((x) => field(...x)).join("")}</div></div><div class="form-section"><h3>Driver performance</h3><p>Start the timer below, then answer each question about the driver's performance.</p>${f.timer ? timerHtml(f.timer) : ""}<div class="field-grid">${f.fields.map((x) => field(...x)).join("")}</div></div><div class="form-section"><h3>Coach observations</h3><p>These notes support coaching and are deliberately excluded from the numerical score.</p><div class="checkboxes">${OBSERVATIONS.map((x) => `<label><input type="checkbox" name="observation" value="${x}"> ${x}</label>`).join("")}</div><div class="field full" style="margin-top:14px"><label for="notes">Notable driving / coaching note</label><textarea id="notes" name="notes" maxlength="600" placeholder="Describe what was notable about the driver's driving."></textarea></div></div><div class="form-actions"><button type="reset" class="button button-secondary">Clear</button><button class="button" type="submit">Submit practice</button></div></form>`}`;
+		)}</div>${custom ? customFormHtml(custom, { courses: state.data.courses }) : `<form id="practice-form" class="panel form-panel"><div class="form-header"><h3>${f.label}</h3><div class="form-intro">${blocksHtml(f.intro)}</div></div><div class="form-section"><h3>Driver information</h3><p>Who is driving, and when the practice took place.</p><div class="field-grid">${f.driverFields.map((x) => fieldHtml(x, { facet: state.facet, courses: state.data.courses })).join("")}</div></div><div class="form-section"><h3>Driver performance</h3><p>Start the timer below, then answer each question about the driver's performance.</p>${f.timer ? timerHtml(f.timer) : ""}<div class="field-grid">${f.fields.map((x) => fieldHtml(x, { facet: state.facet, courses: state.data.courses })).join("")}</div></div><div class="form-section"><h3>Coach observations</h3><p>These notes support coaching and are deliberately excluded from the numerical score.</p><div class="checkboxes">${OBSERVATIONS.map((x) => `<label><input type="checkbox" name="observation" value="${x}"> ${x}</label>`).join("")}</div><div class="field full" style="margin-top:14px"><label for="notes">Notable driving / coaching note</label><textarea id="notes" name="notes" maxlength="600" placeholder="Describe what was notable about the driver's driving."></textarea></div></div><div class="form-actions"><button type="reset" class="button button-secondary">Clear</button><button class="button" type="submit">Submit practice</button></div></form>`}`;
 }
 // Builds the timer panel. Countdown drills get Start/Pause + Reset; the speed stopwatch also gets the Lap Split button.
 function timerHtml(kind) {
@@ -221,6 +231,10 @@ function driverRows(submissions) {
 		.map(([name, entries]) => ({
 			name,
 			grade: [...entries].sort(newestFirst)[0].grade,
+			attempts: entries.length,
+			// For the enlarged leaderboard: attempts per facet and the most recent practice date.
+			perFacet: Object.fromEntries(FACET_KEYS.map((k) => [k, entries.filter((x) => x.facet === k).length])),
+			lastDate: entries.map((x) => x.date).sort().pop(),
 			...driverSummary(entries, state.scoring),
 		}))
 		.sort((a, b) => b.overall - a.overall);
@@ -243,33 +257,25 @@ function facetStats(facet, submissions) {
 const metricTile = (label, value, accent = false) =>
 	`<div class="metric panel ${accent ? "accent" : ""}"><p>${label}</p><strong>${value}</strong></div>`;
 
-// Attempts table with a Delete button on every row. In a facet view the facet's own numeric inputs are shown as columns.
-function attemptsTable(list, facet) {
-	const numeric = facet
-		? FACETS[facet].fields.filter((f) => f[2] === "number")
-		: [];
-	const head = `<th>Date</th>${facet ? "" : "<th>Facet</th>"}<th>Driver</th><th>Grade</th>${numeric.map((f) => `<th>${esc(f[6] || f[1])}</th>`).join("")}<th>Final score</th><th>Observations</th>${facet ? "<th>Notes</th>" : ""}<th class="no-print">Delete</th>`;
-	// Date, Driver, Grade, Final score, Observations, Delete, plus either Facet (general list) or Notes (facet list), plus the raw-value columns.
-	const columns = 7 + numeric.length;
-	const rows = [...list]
-		.sort(newestFirst)
-		.map(
-			(x) =>
-				`<tr><td class="nowrap">${dateText(x.date)}</td>${facet ? "" : `<td>${esc(FACETS[x.facet]?.label || x.facet)}</td>`}<td>${esc(x.driverName)}</td><td>${esc(x.grade)}</td>${numeric.map((f) => `<td>${esc(x.data?.[f[0]] ?? "--")}</td>`).join("")}<td><strong>${score2(x.score.final)}</strong></td><td>${esc(x.data?.observations?.join(", ") || "--")}</td>${facet ? `<td class="note-cell" title="${esc(x.data?.notes || "")}">${esc(x.data?.notes || "--")}</td>` : ""}<td class="no-print"><button class="button button-danger button-small" data-delete-attempt="${esc(x.id)}">Delete</button></td></tr>`,
-		)
-		.join("");
-	return `<div class="table-wrap"><table><thead><tr>${head}</tr></thead><tbody>${rows || `<tr><td colspan="${columns}" class="empty">No attempts recorded.</td></tr>`}</tbody></table></div>`;
-}
+// The recorded-attempts panels (search, filters, Enlarge, Edit, Delete) are drawn by attempts.js. This is what they need from here.
+const attemptsApi = {
+	state,
+	store,
+	toast,
+	modal,
+	content,
+	render: () => render(),
+	applyScoring: () => applyScoring(),
+	openDeleteAttempt: (id) => openDeleteAttempt(id),
+	// Every attempt a panel can show: "general" = All recorded attempts (the four built-in drills), otherwise one drill.
+	listFor: (scope) =>
+		scope === "general" ? builtInSubmissions() : state.data.submissions.filter((x) => x.facet === scope),
+};
 
 // Built-in drills only. Attempts on custom forms have their own analysis and must never count toward the four-facet leaderboard.
 const builtInSubmissions = () =>
 	state.data.submissions.filter((x) => FACET_KEYS.includes(x.facet));
-const attemptLabel = (x) =>
-	FACETS[x.facet]?.label ||
-	state.data.customForms
-		.map(normalizeForm)
-		.find((f) => formFacet(f.id) === x.facet)?.title ||
-	"Custom form";
+const attemptLabel = (x) => attemptLabelOf(state, x);
 
 function renderAnalysis() {
 	const forms = publishedForms();
@@ -285,9 +291,31 @@ function renderAnalysis() {
 		return `${pageHeader("Analysis", `General statistics across all four facets. Ranking method: ${esc(OVERALL_METHODS[state.scoring.overall.method].label)}. ${esc(OVERALL_METHODS[state.scoring.overall.method].help)}`, picker)}${analysisGeneral(builtInSubmissions())}`;
 	if (isCustomFacet(view)) {
 		const form = forms.find((f) => formFacet(f.id) === view);
-		return `${pageHeader("Analysis", `${esc(form.title)}: standings, question summaries, and every recorded attempt. Choose General statistics for the overall leaderboard.`, picker)}${customAnalysisHtml(form, state.data.submissions)}`;
+		return `${pageHeader("Analysis", `${esc(form.title)}: standings, question summaries, and every recorded attempt. Choose General statistics for the overall leaderboard.`, picker)}${customAnalysisHtml(form, state.data.submissions, state.data.courses)}`;
 	}
 	return `${pageHeader("Analysis", `${FACETS[view].label}: standings, statistics, and every recorded attempt. Choose General statistics for the overall leaderboard.`, picker)}${analysisFacet(view, state.data.submissions)}`;
+}
+
+// The Driver leaderboard table. The enlarged version also shows each facet's number of attempts, the facet average, and the
+// most recent practice date.
+function leaderboardTable(rows, expanded = false) {
+	const facetCell = (r, k) =>
+		r.facets[k] === undefined
+			? "<td>--</td>"
+			: `<td>${r.facets[k].toFixed(2)}${expanded ? ` <small class="lb-sub">${r.perFacet[k]} attempt${r.perFacet[k] === 1 ? "" : "s"}</small>` : ""}</td>`;
+	const cols = expanded ? 12 : 10;
+	const body = rows.length
+		? rows
+				.map(
+					(r, i) =>
+						`<tr><td class="rank">#${i + 1}</td><td><strong>${esc(r.name)}</strong></td><td>${esc(r.grade)}</td><td>${r.completed}/4</td><td>${r.attempts}</td>${FACET_KEYS.map((k) => facetCell(r, k)).join("")}${expanded ? `<td>${r.completed ? r.average.toFixed(2) : "--"}</td><td class="nowrap">${r.lastDate ? dateText(r.lastDate) : "--"}</td>` : ""}<td><div>${r.overall.toFixed(2)}</div><div class="bar"><i style="width:${r.overall * 10}%"></i></div></td></tr>`,
+				)
+				.join("")
+		: `<tr><td colspan="${cols}" class="empty">No practice records yet. Submitted records will appear here for administrators.</td></tr>`;
+	return `<div class="table-wrap${expanded ? " sheet-table" : ""}"><table><thead><tr><th>Rank</th><th>Driver</th><th>Grade</th><th>Facets</th><th title="Recorded attempts across all four drills">Attempts</th><th>Speed</th><th>Defense</th><th>Offense</th><th>Shooting</th>${expanded ? '<th title="Average of the completed facet scores">Facet average</th><th>Last practice</th>' : ""}<th>Overall</th></tr></thead><tbody>${body}</tbody></table></div>`;
+}
+function leaderboardSheetHtml() {
+	return `<p class="help sheet-note">Each facet shows the driver's ${esc(ATTEMPT_RULES[state.scoring.overall.attempt].short)} and how many attempts they recorded there. Scores are out of 10. Press Esc or × to return to the page.</p>${leaderboardTable(driverRows(builtInSubmissions()), true)}<p class="legend sheet-note">${esc(overallLegend(state.scoring))}</p>`;
 }
 
 function analysisGeneral(submissions) {
@@ -297,17 +325,9 @@ function analysisGeneral(submissions) {
 		const s = facetStats(k, submissions);
 		return `<tr><td><strong>${FACETS[k].label}</strong></td><td>${s.attempts}</td><td>${s.drivers}</td><td>${s.attempts ? score2(s.average) : "--"}</td><td>${s.best ? `${score2(s.best.score.final)} <small>(${esc(s.best.driverName)})</small>` : "--"}</td></tr>`;
 	}).join("");
-	const board = rows.length
-		? rows
-				.map(
-					(r, i) =>
-						`<tr><td class="rank">#${i + 1}</td><td><strong>${esc(r.name)}</strong></td><td>${esc(r.grade)}</td><td>${r.completed}/4</td>${FACET_KEYS.map((k) => `<td>${r.facets[k]?.toFixed(2) ?? "--"}</td>`).join("")}<td><div>${r.overall.toFixed(2)}</div><div class="bar"><i style="width:${r.overall * 10}%"></i></div></td></tr>`,
-				)
-				.join("")
-		: `<tr><td colspan="9" class="empty">No practice records yet. Submitted records will appear here for administrators.</td></tr>`;
 	return `<div class="metrics">${metricTile("Recorded attempts", submissions.length)}${metricTile("Drivers assessed", rows.length)}${metricTile("Top overall score", rows[0] ? rows[0].overall.toFixed(2) : "--", true)}${metricTile("Completed all four facets", full)}</div>
   <section class="panel analysis-panel" style="margin-bottom:18px"><div class="panel-heading"><div><h3>Statistics by facet</h3><p>Every recorded attempt, scores out of 10.</p></div></div><div class="table-wrap"><table><thead><tr><th>Facet</th><th>Attempts</th><th>Drivers</th><th>Average score</th><th>Best score</th></tr></thead><tbody>${overview}</tbody></table></div></section>
-  <div class="analysis-layout" style="grid-template-columns:1fr"><section class="panel analysis-panel"><div class="panel-heading"><div><h3>Driver leaderboard</h3><p>Each facet shows the driver's ${esc(ATTEMPT_RULES[state.scoring.overall.attempt].short)}; scores are out of 10.</p></div></div><div class="table-wrap"><table><thead><tr><th>Rank</th><th>Driver</th><th>Grade</th><th>Facets</th><th>Speed</th><th>Defense</th><th>Offense</th><th>Shooting</th><th>Overall</th></tr></thead><tbody>${board}</tbody></table></div><p class="legend">${esc(overallLegend(state.scoring))}</p></section>
+  <div class="analysis-layout" style="grid-template-columns:1fr"><section class="panel analysis-panel"><div class="panel-heading"><div><h3>Driver leaderboard</h3><p>Each facet shows the driver's ${esc(ATTEMPT_RULES[state.scoring.overall.attempt].short)}; scores are out of 10. Attempts counts every recorded attempt in the four drills.</p></div><button type="button" class="button button-secondary button-small enlarge-btn no-print" id="enlarge-leaderboard" title="Show the leaderboard larger, with more detail"><span aria-hidden="true">⤢</span> Enlarge</button></div>${leaderboardTable(rows)}<p class="legend">${esc(overallLegend(state.scoring))}</p></section>
   <aside class="panel leaderboard"><h3 style="margin-top:0">Top performers</h3>${
 		rows
 			.slice(0, 5)
@@ -318,8 +338,8 @@ function analysisGeneral(submissions) {
 			.join("") || '<div class="empty">No rankings yet.</div>'
 	}</aside></div>
   <section class="panel" style="margin-top:18px"><div class="panel-heading"><div><h3>How the overall score works</h3><p>${esc(OVERALL_METHODS[state.scoring.overall.method].label)}: ${esc(OVERALL_METHODS[state.scoring.overall.method].help)}</p></div></div>${bandsTableHtml(state.scoring)}<p class="legend">${esc(overallLegend(state.scoring))} The full equations are in Scoring equations below.</p></section>
-  <section class="panel" style="margin-top:18px"><div class="panel-heading"><div><h3>All recorded attempts</h3><p>Most recent first. Deleting an attempt removes it from every analysis view.</p></div></div>${attemptsTable(submissions, null)}</section>
-  ${allEquationsHtml(Object.fromEntries(FACET_KEYS.map((k) => [k, FACETS[k].label])), state.scoring)}`;
+  <div style="margin-top:18px">${attemptsSectionHtml(state, { scope: "general", list: submissions, title: "All recorded attempts", note: "Most recent first. Search or filter to narrow the list. Edit changes an attempt's answers; deleting removes it from every analysis view." })}</div>
+  ${allEquationsHtml(Object.fromEntries(FACET_KEYS.map((k) => [k, FACETS[k].label])), state.scoring, state.data.courses)}`;
 }
 
 function analysisFacet(facet, submissions) {
@@ -351,8 +371,8 @@ function analysisFacet(facet, submissions) {
 		: `<tr><td colspan="7" class="empty">No attempts for this facet.</td></tr>`;
 	return `<div class="metrics">${metricTile("Attempts", s.attempts)}${metricTile("Drivers", s.drivers)}${metricTile("Average score", s.attempts ? score2(s.average) : "--")}${metricTile("Best score", s.best ? `${score2(s.best.score.final)}<small style="font-size:12px;color:var(--muted);font-weight:500"> ${esc(s.best.driverName)}</small>` : "--", true)}</div>
   <section class="panel analysis-panel" style="margin-bottom:18px"><div class="panel-heading"><div><h3>${FACETS[facet].label} standings</h3><p>Ranked by latest attempt. The overall ranking uses each driver's ${esc(ATTEMPT_RULES[state.scoring.overall.attempt].short)} in this facet.</p></div></div><div class="table-wrap"><table><thead><tr><th>Rank</th><th>Driver</th><th>Grade</th><th>Attempts</th><th>Latest</th><th>Best</th><th>Average</th></tr></thead><tbody>${table}</tbody></table></div></section>
-  <section class="panel"><div class="panel-heading"><div><h3>${FACETS[facet].label} attempts</h3><p>Most recent first. Raw values are kept with each calculated score. Deleting an attempt removes it from every analysis view.</p></div></div>${attemptsTable(s.list, facet)}</section>
-  ${facetEquationsHtml(facet, FACETS[facet].label, state.scoring)}`;
+  ${attemptsSectionHtml(state, { scope: facet, list: s.list, title: `${FACETS[facet].label} attempts`, note: "Most recent first, with the raw values behind each calculated score (each scored with its course's settings). Search or filter to narrow the list; Edit changes an attempt's answers." })}
+  ${facetEquationsHtml(facet, FACETS[facet].label, state.scoring, state.data.courses)}`;
 }
 
 // Hooks for the Analysis tab: view dropdown, export button, and the per-row Delete buttons.
@@ -362,11 +382,17 @@ function bindAnalysis() {
 		render();
 	};
 	document.querySelector("#export-pdf")?.addEventListener("click", exportPdf);
-	document
-		.querySelectorAll("[data-delete-attempt]")
-		.forEach(
-			(b) => (b.onclick = () => openDeleteAttempt(b.dataset.deleteAttempt)),
-		);
+	bindAttemptsSections(app, attemptsApi); // search, filters, Enlarge, Edit, Delete
+	document.querySelector("#enlarge-leaderboard")?.addEventListener("click", () =>
+		openContentSheet(attemptsApi, { key: "leaderboard", title: "Driver leaderboard", html: leaderboardSheetHtml }),
+	);
+	// Custom-form spreadsheets draw their own Edit / Delete buttons (outside the attempts panels).
+	app.querySelectorAll("[data-delete-attempt]").forEach((b) => {
+		if (!b.closest("[data-attempts-scope]")) b.onclick = () => openDeleteAttempt(b.dataset.deleteAttempt);
+	});
+	app.querySelectorAll("[data-edit-attempt]").forEach((b) => {
+		if (!b.closest("[data-attempts-scope]")) b.onclick = () => openEditAttempt(attemptsApi, b.dataset.editAttempt);
+	});
 }
 
 // ---------------------------------------------------------------- PDF export: describes the view currently shown in plain data (see pdf.js)
@@ -422,11 +448,12 @@ function generalReport() {
 				title: "Driver leaderboard",
 				note: `Each facet shows the driver's ${ATTEMPT_RULES[state.scoring.overall.attempt].short}; scores are out of 10.`,
 				orientation: "landscape",
-				nowrap: [0, 1, 2, 3, 4, 5, 6, 7, 8],
+				nowrap: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
 				align: [
 					"center",
 					"left",
 					"left",
+					"center",
 					"center",
 					"right",
 					"right",
@@ -439,6 +466,7 @@ function generalReport() {
 					"Driver",
 					"Grade",
 					"Facets",
+					"Attempts",
 					"Speed",
 					"Defense",
 					"Offense",
@@ -450,6 +478,7 @@ function generalReport() {
 					r.name,
 					r.grade,
 					`${r.completed}/4`,
+					String(r.attempts),
 					...FACET_KEYS.map((k) =>
 						r.facets[k] === undefined ? "--" : r.facets[k].toFixed(2),
 					),
@@ -460,16 +489,18 @@ function generalReport() {
 				title: "All recorded attempts",
 				note: "Most recent first.",
 				orientation: "landscape",
-				nowrap: [0, 1, 2, 3, 4],
+				nowrap: [0, 1, 2, 3, 5, 6],
 				head: [
 					"Date",
 					"Facet",
 					"Driver",
 					"Grade",
+					"Course",
+					"Robot",
 					"Final score",
 					"Observations",
 				],
-				align: ["left", "left", "left", "left", "right", "left"],
+				align: ["left", "left", "left", "left", "left", "left", "right", "left"],
 				body: [...subs]
 					.sort(newestFirst)
 					.map((x) => [
@@ -477,6 +508,8 @@ function generalReport() {
 						FACETS[x.facet].label,
 						x.driverName,
 						x.grade,
+						x.data?.course ? courseLabel(state.data.courses, x.data.course) : "--",
+						x.data?.robot || "--",
 						score2(x.score.final),
 						x.data?.observations?.join(", ") || "--",
 					]),
@@ -551,11 +584,13 @@ function facetReport(facet) {
 				title: `${FACETS[facet].label} attempts`,
 				note: "Most recent first, with the raw values behind each calculated score.",
 				orientation: "landscape",
-				nowrap: [0, 1, 2, ...numeric.map((_, i) => i + 3), numeric.length + 3],
+				nowrap: [0, 1, 2, 4, ...numeric.map((_, i) => i + 5), numeric.length + 5],
 				head: [
 					"Date",
 					"Driver",
 					"Grade",
+					"Course",
+					"Robot",
 					...numeric.map((f) => f[6] || f[1]),
 					"Final score",
 					"Observations",
@@ -567,6 +602,8 @@ function facetReport(facet) {
 						dateText(x.date),
 						x.driverName,
 						x.grade,
+						x.data?.course ? courseLabel(state.data.courses, x.data.course) : "--",
+						x.data?.robot || "--",
 						...numeric.map((f) => String(x.data?.[f[0]] ?? "--")),
 						score2(x.score.final),
 						x.data?.observations?.join(", ") || "--",
@@ -589,7 +626,7 @@ async function exportPdf() {
 		else if (isCustomFacet(view)) {
 			const form = publishedForms().find((f) => formFacet(f.id) === view);
 			report = {
-				...customReport(form, state.data.submissions),
+				...customReport(form, state.data.submissions, state.data.courses),
 				fileName: `DriveLab-${slug(form.title)}-${todayKey()}.pdf`,
 			};
 		} else report = facetReport(view);
@@ -743,6 +780,7 @@ function render() {
 	}[state.route];
 	app.innerHTML = views[state.route]();
 	bindView();
+	refreshSheet(); // keep the enlarged attempts view (if open) in step with the page
 }
 function bindView() {
 	if (state.route === "practice") {

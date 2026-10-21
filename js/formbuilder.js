@@ -15,6 +15,7 @@ import {
 	customFormHtml,
 	bindCustomForm,
 	formFacet,
+	COURSE_GROUP_CHOICES,
 } from "./customforms.js";
 
 const typeLabel = (value) =>
@@ -51,6 +52,7 @@ function createDraft() {
 		description: "",
 		sections: [],
 		ranking: { questionId: "", direction: "higher" },
+		courseGroup: "all",
 		nextId: 1,
 		createdAt: now(),
 		updatedAt: null,
@@ -206,7 +208,8 @@ function renderEditor(ctx) {
   <section class="panel form-panel" id="form-editor">
     <div class="b-intro"><label class="b-field"><span>Form title <span class="required">*</span></span><input type="text" data-path="title" placeholder="e.g. Cone slalom drill" value="${esc(d.title)}"></label>
       <label class="b-field"><span>Form description (optional). Start a line with "- " for a bullet point.</span><textarea rows="4" data-path="description" placeholder="What does this form assess, and how is the practice run?">${esc(d.description)}</textarea></label>
-      <p class="help">Every form automatically begins with a <strong>Driver information</strong> section (driver name, grade level, practice date) so each attempt belongs to a driver. The sections you add below follow it.</p></div>
+      <label class="b-field"><span>Courses listed in the "Course driven" question</span><select data-path="courseGroup">${COURSE_GROUP_CHOICES.map(([k, label]) => `<option value="${k}" ${(d.courseGroup || "all") === k ? "selected" : ""}>${esc(label)}</option>`).join("")}</select></label>
+      <p class="help">Every form automatically begins with a <strong>Driver information</strong> section (driver name, grade level, practice date, course driven, and robot driven) so each attempt belongs to a driver. The sections you add below follow it.</p></div>
     ${d.sections.map((s, si) => sectionEditor(d, s, si)).join("")}
     <button type="button" class="button button-secondary" data-act="s-add">+ Add section</button>
     <div class="b-section b-analysis"><div class="b-shead"><strong>Analysis settings</strong></div><p class="help">Every form gets an Analysis page with driver standings, question summaries, and a spreadsheet of all attempts. To rank drivers, choose the number or rating question that measures performance.</p>
@@ -363,7 +366,7 @@ async function saveDraft(ctx) {
 
 function openPreview(ctx) {
 	const form = finalize(ctx.state.formDraft);
-	ctx.content.innerHTML = `<div class="modal-head"><div><p class="eyebrow">PREVIEW</p><h2>${esc(form.title || "Untitled form")}</h2></div><button class="close" id="close-modal">\u00d7</button></div><p class="help">This is how students will see the form. Nothing you enter here is saved.</p>${customFormHtml(form, { preview: true })}`;
+	ctx.content.innerHTML = `<div class="modal-head"><div><p class="eyebrow">PREVIEW</p><h2>${esc(form.title || "Untitled form")}</h2></div><button class="close" id="close-modal">\u00d7</button></div><p class="help">This is how students will see the form. Nothing you enter here is saved.</p>${customFormHtml(form, { preview: true, courses: ctx.state.data.courses })}`;
 	ctx.openModal({ wide: true });
 	document.querySelector("#close-modal").onclick = () => ctx.modal.close();
 	bindCustomForm(form, ctx, { preview: true });

@@ -580,3 +580,184 @@ The site still loaded and displayed data, because loading and the new settings a
 - A browser test now exercises every save and delete path: add event, remove event, submit practice, delete attempt, save course, and save scoring settings. All of them succeed and are written to storage. The earlier calendar, scoring, and export tests still pass.
 
 **Files affected:** `js/storage.js`
+
+### Update 38: "Course driven" and "Robot driven" questions on every form
+
+**Problem with the previous version:** No form recorded which course layout or which robot was used. A course that takes longer could not be told apart from a slower driver, and results on different robots were mixed together.
+
+**How it was fixed (simple):** Every form now has two more required dropdowns in **Driver information**:
+
+- **Course driven** lists the names of that drill's published courses: Speed driving courses on the Speed form, the shared paired-drill courses on the Defensive and Offensive forms, and Shooting only courses on the Shooting form.
+- **Robot driven** offers REBUILT Robot, REEFSCAPE Robot, and Swerve Chassis. On the paired forms it asks about the assessed driver ("Robot driven by Driver 2 (the assessed driver)" on Defensive, Driver 1 on Offensive).
+
+Custom forms get the same two questions automatically. The Form builder has a new **Courses listed in the "Course driven" question** setting: any course, or one course family. If no course has been published for a drill yet, the question shows "No courses published yet" and does not block submitting.
+
+**How it was fixed (technical detail):**
+
+- `constants.js` adds `ROBOTS`, `FACET_COURSE_GROUP` (`defense` and `offense` both map to the `defense` course family), and two new field types: `course` and `robot`. Each facet's `driverFields` gains the two questions after the practice date (after the timer name on Speed).
+- The new module `js/fields.js` (`fieldHtml()`) draws every built-in question for both the Practice form and the new Edit pop-up, so they always match. It replaces `field()` for the drill forms; `field()` remains only for the calendar's event form.
+- `courses.js` adds `publishedCourses(courses, group)` and `courseLabel(courses, key)`. A deleted course is shown as "Course N (deleted)", so old attempts stay readable.
+- Answers are saved inside `data` as `data.course` (the course id, for example `speed-2`) and `data.robot`, for built-in and custom forms alike. The top-level fields of a submission are unchanged, so the `submissions` create rule in `firestore.rules` needs no change.
+- `customforms.js` builds the Driver information section from `BASE_FIELDS` through `fieldHtml()`. `normalizeForm()` adds `courseGroup` (default `"all"`).
+- The Analysis attempt tables and the PDF attempt spreadsheets (General statistics, each drill, and custom forms) gained **Course** and **Robot** columns. Attempts recorded before this update show "Not recorded" until an administrator edits them (Update 40).
+
+**Files affected:** `js/constants.js`, `js/fields.js` (new), `js/courses.js`, `js/customforms.js`, `js/formbuilder.js`, `js/app.js`, `css/styles.css`
+
+### Update 39: Each course has its own scoring settings
+
+**Problem with the previous version:** One scoring function served every course in a drill. A longer Speed driving course was scored against the same 15-second excellent time as a short one, although both assess the same skills.
+
+**How it was fixed (simple):** Each drill tab on **Scoring settings** now starts with a **Course** picker: **Default (no course recorded)** plus every published course for that drill. All courses show the same controls, but each course's values can be different.
+
+- A course uses the drill's default settings until any of its values is changed. It then gets its **own settings**, marked with an "own settings" badge.
+- **Copy values from** copies the default or another course's settings into the selected course.
+- **Use the default settings for this course** removes a course's own settings.
+- The example attempts and the live preview use the selected course. Saving re-scores every recorded attempt with its own course's settings.
+- Attempts with no course recorded (for example older ones) use the default settings.
+
+The Analysis page explains this automatically:
+
+- The default settings card lists which courses use it.
+- Each course with its own settings gets its own card.
+- The "Changes from the original scoring" box lists each course's differences.
+- On General statistics, the equations are grouped by drill in collapsible sections.
+
+**How it was fixed (technical detail):**
+
+- `scoring.js` adds `byCourse: { speed: {}, defense: {}, offense: {}, shooting: {} }` to the settings object, keyed by course id (`COURSE_KEY` = `speed|defense|shooting` + `-1..3`). `settingsFor(config, facet, courseKey)` returns the course's own settings or the drill's default. `scoreSubmission()` scores with `settingsFor(config, facet, data.course)`.
+- `normalizeScoring()` was split into `normalizeFacet()`. Each saved course entry is normalized against its drill's default, and unknown keys are dropped. `validateScoring()` checks every course's settings too, reporting problems as, for example, "Speed driving, Course 2: the weights add up to 90%".
+- With no course settings saved, scores are still bit-for-bit identical to the original formulas; the 250,000-case comparison was re-run with 0 differences.
+- `scoringeditor.js`:
+  - Inputs for a course write to `byCourse.<facet>.<course>.*`.
+  - The first change copies the default into that course (`materialize()`). Only the course bar is then redrawn (`refreshCourseBar()`), so the box being typed in keeps its focus.
+  - Example attempts are scored with the selected course injected as `data.course`.
+- `formulas.js`:
+  - `facetDoc()` and `facetCard()` take a course id.
+  - The new `facetCourseCards()` renders the default card and one card per course with its own settings.
+  - `changesFromDefault()` lists course differences using course names (`courseNameMap()`).
+  - `facetEquationsHtml()` and `allEquationsHtml()` take `state.data.courses`.
+- The settings document stays `settings/scoring`, now holding nested maps. No rules change is needed.
+
+**Files affected:** `js/scoring.js`, `js/scoringeditor.js`, `js/formulas.js`, `js/app.js`, `css/styles.css`
+
+### Update 40: Administrators can edit recorded attempts
+
+**Problem with the previous version:** A recorded attempt could only be deleted, not corrected. Attempts recorded before Update 38 had no way to receive a course or robot answer, and attempts would have no way to answer any question added to a form later.
+
+**How it was fixed (simple):** Every attempt in the Analysis tab has an **Edit** button: All recorded attempts, each drill's attempts, each custom form's spreadsheet, and the enlarged view (Update 42).
+
+- Edit opens a medium-sized pop-up over the page with the form the driver completed, filled in with their answers. It uses the drill's **current** questions, so questions added later can be answered. Those are marked **No answer yet**.
+- Every answer can be changed: driver information, course, robot, the performance values, coach observations, notes, and custom-form answers of every type.
+- The bottom of the pop-up shows the final score (or the custom form's ranking value) for the answers on screen, next to the saved score.
+- **Save changes** stores the edit. Scores, leaderboards, and statistics update straight away, and the attempt is tagged **Edited**.
+- **Revert to original** loads the values exactly as they were first submitted; **Save changes** then restores them and removes the Edited tag. **Cancel** closes without saving.
+- Only the driver name and practice date must be filled in, so old attempts can be completed a little at a time.
+
+**How it was fixed (technical detail):**
+
+- The new module `js/attempts.js` handles editing.
+  - **Built-in drills:** `builtInFormHtml()` renders the drill's current `driverFields` and `fields` through `fieldHtml()` in edit mode (`edit-` id prefix, values filled in, unanswered fields marked), plus the observations and notes.
+  - **Custom forms:** `customFormHtml(form, { edit: true, values })` renders the form with no timers or submit buttons and nothing required except the driver name and date. `fillCustom()` then fills in text, number, dropdown, radio, rating-scale, and checkbox answers.
+- `readEdit()` builds the updated attempt.
+  - **Built-in drills:** the saved `data`, overlaid with the form's values (strings, exactly as the Practice form saves them), and a fresh `score` from `scoreSubmission()`.
+  - **Custom forms:** the saved `answers` overlaid with `collectAnswers()`, so answers to questions since removed from the form are kept, plus `metricOf()`.
+- The first edit stores `original` (driver name, grade, date, and data as first submitted) and `editedAt` on the attempt. When the saved values match `original` again, compared with sorted keys and with blank answers ignored, both fields are removed.
+- Saving uses `store.saveRecord("submissions", item)`. The existing rule `allow read, update, delete: if admin()` already allows administrators to update attempts, so `firestore.rules` is unchanged. Afterwards `applyScoring()` and `render()` refresh every view.
+- The pop-up is the site's own `<dialog>` with the `edit-modal` class: up to 860 px wide and 86% of the window height, with the form scrolling inside. It opens on top of the enlarged view when started from there.
+
+**Files affected:** `js/attempts.js` (new), `js/customforms.js`, `js/fields.js`, `js/app.js`, `css/styles.css`
+
+### Update 41: Search and filters for recorded attempts
+
+**Problem with the previous version:** With many attempts, finding one driver's attempts, a grade, or the attempts missing information meant scrolling the whole list.
+
+**How it was fixed (simple):** **All recorded attempts** and each drill's attempts list now have:
+
+- **Search:** matches the driver, grade, drill, date, course, robot, the other driver in a paired drill, timer name, observations, notes, answers, and score. Every word typed must match, for example `alex long loop`.
+- **Filters menu:** tick boxes for drill (General statistics), grade level, robot, course, coach observations, and record status (edited by an administrator, or missing course or robot). Boxes in the same group widen the results; different groups narrow them.
+- **Filter chips:** each active filter appears as a chip that removes it when clicked, with **Clear all** beside them.
+- **Result count:** "Showing 4 of 15".
+- **Missing-information note:** when attempts have no course or robot recorded, a note says how many and how to find them.
+
+Search and filters are remembered while moving around the Analysis tab, and are shared with the enlarged view.
+
+**How it was fixed (technical detail):**
+
+- `attemptsSectionHtml()` and `bindAttemptsSections()` in `attempts.js` render and wire each panel. Filters are kept in `state.attemptFilters[scope]`, where the scope is `general` or a drill key.
+- Typing or ticking redraws only the table, count, and chips, never the search box, so focus is never lost.
+- Edit, Delete, chips, and Enlarge use event delegation on the panel, so redrawn rows need no re-binding. A single page-wide listener closes an open Filters menu when the administrator clicks anywhere else.
+
+**Files affected:** `js/attempts.js`, `js/app.js`, `css/styles.css`
+
+### Update 42: Enlarged view for recorded attempts
+
+**Problem with the previous version:** The attempts tables gained Course, Robot, and editing columns, and on a laptop screen they only fit by scrolling inside a narrow panel.
+
+**How it was fixed (simple):** An **Enlarge** button at the top right of each attempts list opens it as a layer over the page, about 94% of the window wide and 88% high, so the page stays visible around it. The enlarged list keeps the same search and filters and adds:
+
+- every response for each attempt;
+- the notes in full;
+- when the attempt was recorded;
+- the other driver (paired drills) or the timer name (Speed driving).
+
+Its headings stay in view while scrolling. Edit and Delete work there too, and the list updates straight away. Esc or × returns to the page.
+
+**How it was fixed (technical detail):** `openSheet()` creates one `<dialog id="attempt-sheet" class="sheet">` (in-page, not a browser window) and fills it with `attemptsSectionHtml(..., { expanded: true })`. `render()` calls `refreshSheet()`, so an edit or delete redraws the open sheet, and closing the sheet redraws the page so it shows the same filters. The sheet is a flex column whose table scrolls inside it with sticky headings.
+
+**Files affected:** `js/attempts.js`, `js/app.js`, `css/styles.css`
+
+### Update 43: Attempts column in the Driver leaderboard
+
+**Problem with the previous version:** The leaderboard did not show how many attempts each driver had recorded.
+
+**How it was fixed (simple):** The Driver leaderboard has an **Attempts** column after **Facets**: the number of attempts the driver has recorded across the four drills. The PDF leaderboard has the same column.
+
+**How it was fixed (technical detail):** `driverRows()` adds `attempts: entries.length`. The leaderboard header, rows, empty-state `colspan` (now 10), and `generalReport()` (head, alignment, no-wrap columns, body) were updated.
+
+**Files affected:** `js/app.js`
+
+### Update 44: A wide table no longer widens the whole page on desktop
+
+**Problem with the previous version:** On desktop, an Analysis view with a wide attempts table (Speed driving or Defensive driving, now with Course and Robot columns) made the whole page wider than the window. The page header, tiles, and Download PDF button then needed sideways scrolling.
+
+**How it was fixed (simple):** Wide tables now scroll inside their own panel, and the page always fits the window.
+
+**How it was fixed (technical detail):** The desktop `.app-shell` grid used `grid-template-columns: 244px 1fr`. A `1fr` track has an automatic minimum equal to its content's minimum width, so a no-wrap table set the column's width. It is now `244px minmax(0, 1fr)`, the same fix Update 29 made for the phone layout. Every Analysis view was checked at 1440 px and 390 px wide: the page width equals the window width.
+
+**Files affected:** `css/styles.css`
+
+### Update 45: Larger enlarged view and Edit pop-up; Enlarge button on the Driver leaderboard
+
+**Problem with the previous version:** The enlarged view of the recorded attempts (about 94% by 88% of the window) and the Edit attempt pop-up (up to 860 px wide) were a little small for the amount of detail they show. The Driver leaderboard could not be enlarged at all.
+
+**How it was fixed (simple):**
+
+- The enlarged view now fills about **97%** of the window's width and height. A thin edge of the page stays visible, so it still reads as a layer over the page.
+- The **Edit attempt** pop-up is larger: up to 1,080 px wide (about 88% of narrower windows) and 92% of the window height. That is still smaller than the enlarged view, which it can open on top of.
+- The **Driver leaderboard** has an **Enlarge** button at its top right that opens the leaderboard in the same layer. The enlarged leaderboard adds the number of attempts in each facet under that facet's score, each driver's facet average, and their most recent practice date. Esc or × returns to the page.
+
+**How it was fixed (technical detail):**
+
+- **Sizes (CSS):**
+  - `dialog.sheet` uses `width` / `height` / `max-width` / `max-height` of `97vw` / `97vh` with `margin: auto`. The explicit maximums override the browser's default `<dialog>` limit, which would otherwise cap the size at the window minus about 38 px.
+  - `dialog.edit-modal` is `min(1080px, 88vw)` wide with a `92vh` maximum height, and its content scrolls inside.
+  - On phones the pop-up is the window width minus 20 px.
+- **Other sections in the enlarged layer:** `openContentSheet(api, { key, title, html })` in `attempts.js` shows any section there. `html()` is called again by `refreshSheet()` whenever the page re-renders, so the enlarged copy always shows current data.
+- **Leaderboard table:** in `app.js`, the leaderboard table moved into `leaderboardTable(rows, expanded)`, and `leaderboardSheetHtml()` builds the enlarged version. `driverRows()` now also returns `perFacet` (attempts in each facet) and `lastDate` (most recent practice date).
+- **Checks:** the enlarged attempts view and the enlarged leaderboard measured 97% of the window's width and height at 1440 x 900 and at 390 x 844, and the page still never scrolls sideways.
+
+**Files affected:** `js/attempts.js`, `js/app.js`, `css/styles.css`
+
+### Update 46: The enlarged views now fill their whole area
+
+**Problem with the previous version:** In the enlarged view of All recorded attempts, and in the enlarged Driver leaderboard, the table stopped about two-thirds of the way down and left a large empty area at the bottom. With many attempts, the administrator had to scroll a short box inside a mostly empty layer.
+
+**How it was fixed (simple):** The table now uses all the height of the enlarged layer and scrolls only when the rows do not fit. The page's normal (not enlarged) tables are unchanged.
+
+**How it was fixed (technical detail):**
+
+- Every `.table-wrap` on the page has `max-height: 570px`, so long tables scroll inside the page. The enlarged layer's table (`dialog.sheet .sheet-table`) also has that class, so it inherited the 570 px limit even though the layer is about 97% of the window tall.
+- That table now sets `max-height: none` and `min-height: 0`. It is a flex item that fills the layer (`flex: 1` for the attempts list), or grows with its rows up to the layer's height (`flex: 0 1 auto` for the leaderboard, so the box ends at its last row when there are only a few drivers).
+- Checked with 74 attempts at 1462 x 787, 1440 x 900, and 390 x 844. The attempts table now ends 18 px (the layer's padding) above the layer's bottom edge on all three. The leaderboard table fills the layer down to the formula note beneath it.
+
+**Files affected:** `css/styles.css`

@@ -28,6 +28,24 @@ const groupOf = (key) =>
 	COURSE_GROUPS.find((g) => g.key === key) || COURSE_GROUPS[0];
 const hasLaps = (group) => group === "speed"; // only Speed driving courses have a Lap 1 and a Lap 2 path
 
+// ---------------------------------------------------------------- course choices (shared by the forms, Analysis, and Scoring settings)
+// The courses that exist for one course family, in slot order: [{ key: "speed-1", number: 1, name: "Cone weave" }, ...].
+// A course "exists" once it has been saved in the Course builder (it then appears on the Courses page).
+export function publishedCourses(courses = {}, group) {
+	return [1, 2, 3]
+		.map((number) => ({ key: courseKey(group, number), number }))
+		.filter((c) => courses[c.key])
+		.map((c) => ({ ...c, name: courses[c.key].name || `${groupOf(group).label} Course ${c.number}` }));
+}
+// Display name for a saved course answer ("speed-2"). A course that has since been deleted is still named, so old attempts stay readable.
+export function courseLabel(courses = {}, key) {
+	if (!key) return "";
+	const [group, number] = String(key).split("-");
+	const course = courses[key];
+	if (course) return course.name || `Course ${number}`;
+	return COURSE_GROUPS.some((g) => g.key === group) && /^[1-3]$/.test(number) ? `Course ${number} (deleted)` : String(key);
+}
+
 // One colour per feature, used by the pictures AND the key so they always match.
 // (Walls and the background are also recoloured by CSS in dark mode through the course-wall-fill / course-bg-fill classes.)
 export const COLORS = {

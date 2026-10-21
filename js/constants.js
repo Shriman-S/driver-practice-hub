@@ -11,7 +11,8 @@
 // A field is an array:  [ name, label, type, required, help, description, shortLabel ]
 //   name        - the input's id/name; this is also the key the answer is saved under (scoring.js and the Analysis tab read it)
 //   label       - the question as the recorder sees it
-//   type        - "text", "number", "date", or "select" (a grade dropdown)
+//   type        - "text", "number", "date", "select" (a grade dropdown), "robot" (the ROBOTS dropdown), or "course" (a dropdown of
+//                 the published courses for this drill, from the Courses page; saved as the course id, e.g. "speed-1")
 //   required    - true if the form cannot be submitted without it
 //   help        - optional small hint shown UNDER the input
 //   description - optional explanation shown between the question and its input, for questions recorders could interpret differently
@@ -21,6 +22,20 @@
 //   a plain string      = a paragraph
 //   an array of strings = a bulleted list shown beneath the paragraph above it
 // Example:  [ "Main sentence.", [ "first bullet", "second bullet" ], "A closing sentence." ]
+
+// The robots a driver can drive. Every form (built-in and custom) asks which one was driven.
+export const ROBOTS = ["REBUILT Robot", "REEFSCAPE Robot", "Swerve Chassis"];
+// Which course family each drill is driven on (defense and offense share the paired-drill courses). See courses.js.
+export const FACET_COURSE_GROUP = { speed: "speed", defense: "defense", offense: "defense", shooting: "shooting" };
+// The two questions every form shares. The course answer selects the course's own scoring settings (scoring.js).
+const COURSE_FIELD = [
+	"course",
+	"Course driven",
+	"course",
+	true,
+	"Choose the layout used today. The layouts are on the Courses page.",
+];
+const robotField = (label) => ["robot", label, "robot", true];
 
 // Shared by the Speed and Shooting forms (identical rule text).
 const PENALTY_DESCRIPTION = [
@@ -66,6 +81,8 @@ export const FACETS = {
 			["grade", "Driver grade level", "select", true],
 			["practiceDate", "Practice date", "date", true],
 			["timerName", "Timer / observer name", "text", true],
+			COURSE_FIELD,
+			robotField("Robot driven"),
 		],
 		fields: [
 			[
@@ -123,6 +140,8 @@ export const FACETS = {
 			["driverName", DRIVER_2_NAME, "text", true, ASSESSED_HINT],
 			["grade", DRIVER_2_GRADE, "select", true],
 			["practiceDate", "Practice date", "date", true],
+			COURSE_FIELD,
+			robotField("Robot driven by Driver 2 (the assessed driver)"),
 		],
 		fields: [
 			[
@@ -196,6 +215,8 @@ export const FACETS = {
 			["defenderName", DRIVER_2_NAME, "text", true],
 			["defenderGrade", DRIVER_2_GRADE, "select", true],
 			["practiceDate", "Practice date", "date", true],
+			COURSE_FIELD,
+			robotField("Robot driven by Driver 1 (the assessed driver)"),
 		],
 		fields: [
 			[
@@ -246,6 +267,8 @@ export const FACETS = {
 			],
 			["grade", "Driver grade level", "select", true],
 			["practiceDate", "Practice date", "date", true],
+			COURSE_FIELD,
+			robotField("Robot driven"),
 		],
 		fields: [
 			["fuelShot", "Total fuel shot", "number", true],

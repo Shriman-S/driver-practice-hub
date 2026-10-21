@@ -118,7 +118,7 @@ body {
 .app-shell {
 	min-height: 100vh;
 	display: grid;
-	grid-template-columns: 244px 1fr;
+	grid-template-columns: 244px minmax(0, 1fr); /* minmax: a wide table scrolls inside its panel instead of widening the page */
 }
 .sidebar {
 	background: var(--nav);
@@ -1935,4 +1935,423 @@ dialog {
 .export-steps > .help {
 	margin: 10px 0 0;
 	display: block;
+}
+
+/* ---- Recorded attempts: search, filters, Enlarge (Analysis) ---- */
+.attempts-section .panel-heading {
+	align-items: flex-start;
+	gap: 12px;
+}
+.enlarge-btn {
+	flex: none;
+	white-space: nowrap;
+}
+.attempts-tools {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 10px;
+	align-items: center;
+	padding: 0 21px 10px;
+}
+.attempts-search {
+	flex: 1 1 260px;
+	max-width: 460px;
+}
+.attempts-search input {
+	width: 100%;
+}
+.attempts-count {
+	font-size: 13px;
+	color: var(--muted);
+	font-weight: 650;
+	margin-left: auto;
+}
+.filter-menu {
+	position: relative;
+}
+.filter-menu summary {
+	list-style: none;
+	cursor: pointer;
+}
+.filter-menu summary::-webkit-details-marker {
+	display: none;
+}
+.filter-menu summary::after {
+	content: " ▾";
+}
+.filter-pop {
+	position: absolute;
+	z-index: 30;
+	top: calc(100% + 6px);
+	left: 0;
+	width: min(560px, 86vw);
+	max-height: 60vh;
+	overflow: auto;
+	background: var(--panel);
+	border: 1px solid var(--line);
+	border-radius: 10px;
+	box-shadow: 0 18px 40px #0003;
+	padding: 14px 16px;
+	display: grid;
+	grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+	gap: 12px 18px;
+}
+.filter-pop fieldset {
+	border: 0;
+	margin: 0;
+	padding: 0;
+	display: grid;
+	gap: 5px;
+	align-content: start;
+}
+.filter-pop legend {
+	font-size: 11px;
+	font-weight: 800;
+	letter-spacing: 0.04em;
+	text-transform: uppercase;
+	color: var(--muted);
+	margin-bottom: 4px;
+}
+.filter-pop label {
+	display: flex;
+	gap: 7px;
+	align-items: center;
+	font-size: 13px;
+	cursor: pointer;
+}
+.filter-pop input {
+	width: auto;
+}
+.filter-foot {
+	grid-column: 1 / -1;
+	display: flex;
+	justify-content: flex-end;
+	border-top: 1px solid var(--line);
+	padding-top: 10px;
+}
+.filter-chips {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+	padding: 0 21px;
+}
+.filter-chips:not(:empty) {
+	padding-bottom: 10px;
+}
+.filter-chip,
+.filter-clear {
+	border: 1px solid var(--line);
+	background: var(--pill-bg);
+	color: var(--ink);
+	border-radius: 999px;
+	padding: 4px 10px;
+	font: 650 12px inherit;
+	font-family: inherit;
+	cursor: pointer;
+}
+.filter-chip:hover {
+	border-color: var(--danger);
+}
+.filter-clear {
+	background: transparent;
+	color: var(--blue);
+	border-color: transparent;
+}
+.attempts-missing {
+	margin: 0;
+	padding: 0 21px 10px;
+	display: block;
+}
+td.missing {
+	color: var(--muted);
+	font-style: italic;
+	white-space: nowrap;
+}
+.edited-pill {
+	display: inline-block;
+	font-size: 10px;
+	font-weight: 800;
+	text-transform: uppercase;
+	letter-spacing: 0.03em;
+	color: var(--notice-ink);
+	background: var(--notice-bg);
+	border: 1px solid var(--notice-line);
+	border-radius: 999px;
+	padding: 1px 6px;
+	margin-left: 4px;
+	vertical-align: middle;
+}
+.resp-cell {
+	min-width: 240px;
+}
+.resp-cell span {
+	display: block;
+	font-size: 12px;
+	line-height: 1.45;
+}
+.note-cell.wide {
+	max-width: 320px;
+	white-space: normal;
+}
+/* The enlarged view: a layer over the page, not the full window. */
+dialog.sheet {
+	width: 97vw; /* about 97% of the window, so a sliver of the page stays visible around it */
+	height: 97vh;
+	max-width: 97vw;
+	max-height: 97vh;
+	margin: auto;
+	display: none;
+	flex-direction: column;
+	overflow: hidden;
+}
+dialog.sheet[open] {
+	display: flex;
+}
+.sheet-head {
+	display: flex;
+	justify-content: space-between;
+	align-items: flex-start;
+	padding: 20px 24px 8px;
+	border-bottom: 1px solid var(--line);
+}
+.sheet-head h2 {
+	margin: 0;
+	font-size: 20px;
+}
+dialog.sheet .attempts-section {
+	box-shadow: none;
+	border: 0;
+	border-radius: 0;
+	flex: 1;
+	display: flex;
+	flex-direction: column;
+	min-height: 0;
+	margin: 0;
+}
+dialog.sheet [data-attempts-body] {
+	flex: 1;
+	min-height: 0;
+	display: flex;
+	padding: 0 21px 18px;
+}
+dialog.sheet .sheet-table {
+	flex: 1;
+	min-height: 0;
+	max-height: none; /* on the page every table stops at 570 px (.table-wrap); in the enlarged view it uses all the space */
+	overflow: auto;
+	border: 1px solid var(--line);
+	border-radius: 8px;
+}
+dialog.sheet .sheet-table thead th {
+	position: sticky;
+	top: 0;
+	z-index: 1;
+	background: var(--panel);
+}
+
+/* ---- Edit attempt pop-up: medium size, scrolls inside ---- */
+dialog.edit-modal {
+	width: min(1080px, 88vw); /* larger than before, but smaller than the 97% enlarged view */
+	max-height: 92vh;
+}
+dialog.edit-modal #modal-content {
+	display: flex;
+	flex-direction: column;
+	max-height: 92vh;
+	padding: 22px 24px 18px;
+	box-sizing: border-box;
+}
+.edit-meta {
+	margin: 6px 0 10px;
+	display: block;
+}
+.edit-body {
+	overflow: auto;
+	flex: 1;
+	min-height: 0;
+	border: 1px solid var(--line);
+	border-radius: 10px;
+	background: var(--section-bg);
+}
+.edit-form {
+	box-shadow: none;
+	border: 0;
+	padding: 0;
+	margin: 0;
+	background: transparent;
+}
+.edit-form .form-section {
+	padding: 18px 20px;
+}
+.edit-form .field-grid {
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	gap: 14px 18px;
+	align-items: start; /* each answer box sits directly under its own question, even beside a long description */
+}
+.edit-form .field-grid .field {
+	justify-content: flex-start;
+}
+.edit-form .field.unanswered select,
+.edit-form .field.unanswered input,
+.edit-form .field.unanswered textarea {
+	border-color: var(--notice-line);
+	box-shadow: 0 0 0 2px var(--notice-bg);
+}
+.no-answer {
+	font-size: 10px;
+	font-weight: 800;
+	text-transform: uppercase;
+	color: var(--notice-ink);
+	background: var(--notice-bg);
+	border-radius: 999px;
+	padding: 1px 6px;
+	margin-left: 4px;
+}
+.edit-foot {
+	display: flex;
+	flex-wrap: wrap;
+	justify-content: space-between;
+	align-items: center;
+	gap: 10px;
+	padding-top: 14px;
+}
+.edit-foot .form-actions {
+	margin: 0;
+	flex-wrap: wrap;
+}
+.edit-score {
+	font-size: 13px;
+	color: var(--muted);
+}
+.edit-score strong {
+	color: var(--ink);
+	font-size: 15px;
+}
+.edit-status {
+	margin-bottom: 10px;
+	padding: 10px 12px;
+	border-radius: 8px;
+	font-size: 13px;
+	background: var(--timer-bg);
+	border: 1px solid var(--timer-line);
+}
+.edit-status.bad {
+	background: var(--error-bg);
+	border-color: var(--error-line);
+	color: var(--error-ink);
+}
+@media (max-width: 640px) {
+	.edit-form .field-grid {
+		grid-template-columns: minmax(0, 1fr);
+	}
+	.attempts-count {
+		margin-left: 0;
+	}
+	dialog.edit-modal {
+		width: calc(100% - 20px);
+	}
+}
+/* Other sections in the enlarged view (the Driver leaderboard). */
+.sheet-content {
+	flex: 1;
+	min-height: 0;
+	display: flex;
+	flex-direction: column;
+	padding: 14px 24px 18px;
+	gap: 10px;
+}
+.sheet-note {
+	margin: 0;
+	display: block;
+}
+.lb-sub {
+	display: block;
+	font-size: 11px;
+	color: var(--muted);
+	font-weight: 500;
+}
+
+/* ---- Analysis equations grouped by drill; Scoring settings course picker ---- */
+.eq-facet {
+	margin-top: 14px;
+	border: 1px solid var(--line);
+	border-radius: 10px;
+	padding: 10px 14px 14px;
+}
+.eq-facet > summary {
+	cursor: pointer;
+	font-weight: 800;
+	font-size: 15px;
+	margin-bottom: 8px;
+}
+.sc-courses {
+	border: 1px solid var(--line);
+	border-radius: 10px;
+	padding: 12px 14px;
+	background: var(--timer-bg);
+	display: grid;
+	gap: 8px;
+}
+.sc-courses-head {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+	align-items: baseline;
+}
+.sc-courses-head .help {
+	margin: 0;
+}
+.sc-course-list {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+}
+.sc-course {
+	border: 1px solid var(--line);
+	background: var(--panel);
+	color: var(--ink);
+	border-radius: 8px;
+	padding: 7px 11px;
+	font: 700 13px inherit;
+	font-family: inherit;
+	cursor: pointer;
+	display: inline-flex;
+	gap: 6px;
+	align-items: center;
+}
+.sc-course.active {
+	border-color: var(--accent);
+	box-shadow: 0 0 0 2px var(--accent-ring);
+}
+.sc-own {
+	font-size: 10px;
+	font-weight: 800;
+	text-transform: uppercase;
+	color: var(--green);
+}
+.sc-course-note {
+	margin: 0;
+	font-size: 13px;
+	color: var(--desc-ink);
+}
+.sc-course-tools {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+	align-items: end;
+}
+.sc-copy {
+	display: flex;
+	gap: 8px;
+	align-items: center;
+	font-size: 12px;
+	font-weight: 700;
+}
+.sc-copy select {
+	width: auto;
+	padding: 5px 8px;
+	font-size: 13px;
+}
+dialog.sheet .sheet-content .sheet-table {
+	flex: 0 1 auto; /* as tall as its rows, up to all the space in the layer; scrolls inside it when there are more drivers */
 }

@@ -7,11 +7,13 @@
 //                 tool: { type: "none" | "stopwatch" | "countdown", seconds: 90, fillQuestionId: "" },
 //                 questions: [ { id, type, label, description, required, optionsText, min, max, scaleMax } ] } ],
 //   ranking: { questionId: "" | "q3", direction: "higher" | "lower" },     which number/scale question ranks the drivers
+//   courseGroup: "all" | "speed" | "defense" | "shooting",                 which courses the Course driven question lists
 //   nextId, createdAt, updatedAt
 // }
 // Question types: number, text (short), paragraph (long), choice (radio buttons), checkbox, dropdown, scale (1 to scaleMax).
-// Every custom form automatically starts with a locked "Driver information" section (name, grade, practice date), so each attempt can
-// be tied to a driver. A submission is saved like the built-in ones: facet "form:<id>", with the answers stored under data.answers.
+// Every custom form automatically starts with a locked "Driver information" section (name, grade, practice date, course driven, robot
+// driven), so each attempt can be tied to a driver. A submission is saved like the built-in ones: facet "form:<id>", with the answers
+// stored under data.answers and the course and robot under data.course / data.robot (the same keys as the built-in drills).
 import {
 	esc,
 	uid,
@@ -21,7 +23,23 @@ import {
 	blocksHtml,
 	textToBlocks,
 } from "./util.js";
-import { GRADES } from "./constants.js";
+import { fieldHtml } from "./fields.js";
+import { courseLabel } from "./courses.js";
+
+// The Driver information questions every custom form starts with (same wording and controls as the built-in drills).
+export const COURSE_GROUP_CHOICES = [
+	["all", "Any course (every published course)"],
+	["speed", "Speed driving courses"],
+	["defense", "Defensive + Offensive driving courses"],
+	["shooting", "Shooting only courses"],
+];
+const BASE_FIELDS = [
+	["driverName", "Driver name", "text", true, "First name with last initial. Your recent local name is suggested."],
+	["grade", "Driver grade level", "select", true],
+	["practiceDate", "Practice date", "date", true],
+	["course", "Course driven", "course", true, "Choose the layout used today. The layouts are on the Courses page."],
+	["robot", "Robot driven", "robot", true],
+];
 
 export const QUESTION_TYPES = [
 	{ value: "number", label: "Number" },
@@ -84,6 +102,7 @@ export function normalizeForm(raw) {
 			questionId: raw.ranking?.questionId || "",
 			direction: raw.ranking?.direction === "lower" ? "lower" : "higher",
 		},
+		courseGroup: COURSE_GROUP_CHOICES.some(([k]) => k === raw.courseGroup) ? raw.courseGroup : "all",
 		nextId: raw.nextId || 1,
 		createdAt: raw.createdAt || now(),
 		updatedAt: raw.updatedAt || null,
@@ -104,18 +123,9 @@ const descBox = (id, text) =>
 		? `<div class="q-desc" id="${id}-desc">${blocksHtml(textToBlocks(text))}</div>`
 		: "";
 
-// The three built-in Driver information questions, written with the same markup as the built-in forms.
-function baseField(id, label, type, help = "") {
-	const input =
-		type === "select"
-			? `<select id="${id}" name="${id}" required><option value="">Select grade</option>${GRADES.map((g) => `<option>${g}</option>`).join("")}</select>`
-			: `<input id="${id}" name="${id}" type="${type}" required ${type === "text" ? 'maxlength="80"' : ""}/>`;
-	return `<div class="field"><label for="${id}">${esc(label)} ${star}</label>${input}${help ? `<span class="help">${esc(help)}</span>` : ""}</div>`;
-}
-
-function questionHtml(q, form) {
+function questionHtml(q, form, edit = false) {
 	const id = q.id,
-		req = q.required,
+		req = q.required && !edit, // an administrator editing an old attempt may leave questions unanswered
 		desc = descBox(id, q.description),
 		described = desc ? ` aria-describedby="${id}-desc"` : "";
 	const label = `${esc(q.label)} ${req ? star : ""}`,
@@ -177,15 +187,22 @@ function toolHtml(section, form) {
 	return `<div class="timer" data-tool="${t.type}" data-seconds="${t.seconds}" data-fill="${fill ? esc(fill.id) : ""}" data-fill-label="${fill ? esc(fill.label) : ""}"><div><span class="tag">${t.type === "stopwatch" ? "STOPWATCH" : `${t.seconds}-SECOND TIMER`}</span><div class="timer-output">${start}</div></div><button type="button" class="button button-secondary" data-act="toggle">Start</button><button type="button" class="button button-secondary button-small" data-act="reset">Reset</button><span class="help" data-role="help"></span></div>`;
 }
 
-export function customFormHtml(form, { preview = false } = {}) {
+// `edit` draws the form for the administrator's Edit attempt pop-up: no timers or submit buttons, nothing required except the driver
+// name and date, and the Driver information answers from `values`. (Question answers are filled in afterwards; see attempts.js.)
+export function customFormHtml(form, { preview = false, edit = false, courses = {}, values = {} } = {}) {
 	const sections = form.sections
 		.map(
 			(s) =>
-				`<div class="form-section"><h3>${esc(s.title)}</h3>${s.description?.trim() ? `<div class="section-desc">${blocksHtml(textToBlocks(s.description))}</div>` : ""}${toolHtml(s, form)}<div class="field-grid">${s.questions.map((q) => questionHtml(q, form)).join("")}</div></div>`,
+				`<div class="form-section"><h3>${esc(s.title)}</h3>${s.description?.trim() ? `<div class="section-desc">${blocksHtml(textToBlocks(s.description))}</div>` : ""}${edit ? "" : toolHtml(s, form)}<div class="field-grid">${s.questions.map((q) => questionHtml(q, form, edit)).join("")}</div></div>`,
 		)
 		.join("");
+	const base = BASE_FIELDS.map((def) =>
+		fieldHtml(def, { courseGroup: form.courseGroup || "all", courses, edit, value: edit ? values[def[0]] : undefined, idPrefix: edit ? "edit-" : "" }),
+	).join("");
+	const driverInfo = `<div class="form-section"><h3>Driver information</h3>${edit ? "" : "<p>Who is driving, and when the practice took place.</p>"}<div class="field-grid">${base}</div></div>`;
+	if (edit) return `<form id="edit-attempt-form" class="form-panel edit-form" novalidate data-custom-form="${esc(form.id)}">${driverInfo}${sections}</form>`;
 	return `<form id="practice-form" class="panel form-panel" data-custom-form="${esc(form.id)}"><div class="form-header"><h3>${esc(form.title)}</h3><div class="form-intro">${blocksHtml(textToBlocks(form.description))}</div></div>
-    <div class="form-section"><h3>Driver information</h3><p>Who is driving, and when the practice took place.</p><div class="field-grid">${baseField("driverName", "Driver name", "text", "First name with last initial. Your recent local name is suggested.")}${baseField("grade", "Driver grade level", "select")}${baseField("practiceDate", "Practice date", "date")}</div></div>
+    ${driverInfo}
     ${sections}
     <div class="form-actions"><button type="reset" class="button button-secondary">Clear</button><button class="button" type="submit">${preview ? "Submit (preview only)" : "Submit practice"}</button></div></form>`;
 }
@@ -373,7 +390,7 @@ export function bindCustomForm(form, ctx, { preview = false } = {}) {
 			driverName: formEl.driverName.value.trim(),
 			grade: formEl.grade.value,
 			date: formEl.practiceDate.value,
-			data: { formTitle: form.title, answers },
+			data: { formTitle: form.title, answers, course: formEl.course?.value || "", robot: formEl.robot?.value || "" },
 			score: { final: metric ?? 0, metric },
 			createdAt: now(),
 		};
@@ -495,7 +512,7 @@ const tile = (label, value, accent = false) =>
 	`<div class="metric panel ${accent ? "accent" : ""}"><p>${esc(label)}</p><strong>${value}</strong></div>`;
 const metricName = (m) => (m.rankQ ? m.rankQ.label : "Ranking value");
 
-export function customAnalysisHtml(form, submissions) {
+export function customAnalysisHtml(form, submissions, courses = {}) {
 	const m = customModel(form, submissions),
 		rank = m.rankQ;
 	const standingsRows = m.standings.length
@@ -518,12 +535,12 @@ export function customAnalysisHtml(form, submissions) {
 		)
 		.join("");
 	const columns = allQuestions(form);
-	const sheetHead = `<th>Date</th><th>Driver</th><th>Grade</th>${columns.map((q) => `<th>${esc(q.label)}</th>`).join("")}<th class="no-print">Delete</th>`;
+	const sheetHead = `<th>Date</th><th>Driver</th><th>Grade</th><th>Course</th><th>Robot</th>${columns.map((q) => `<th>${esc(q.label)}</th>`).join("")}<th class="no-print">Actions</th>`;
 	const sheetRows = [...m.list]
 		.sort(newestFirst)
 		.map(
 			(x) =>
-				`<tr><td class="nowrap">${dateText(x.date)}</td><td>${esc(x.driverName)}</td><td>${esc(x.grade)}</td>${columns
+				`<tr><td class="nowrap">${dateText(x.date)}${x.editedAt ? ' <span class="edited-pill">Edited</span>' : ""}</td><td>${esc(x.driverName)}</td><td>${esc(x.grade)}</td>${x.data?.course ? `<td>${esc(courseLabel(courses, x.data.course))}</td>` : '<td class="missing">Not recorded</td>'}${x.data?.robot ? `<td class="nowrap">${esc(x.data.robot)}</td>` : '<td class="missing">Not recorded</td>'}${columns
 					.map((q) => {
 						const text = answerText(q, x.data?.answers?.[q.id]);
 						return q.type === "paragraph" || q.type === "text"
@@ -532,17 +549,17 @@ export function customAnalysisHtml(form, submissions) {
 					})
 					.join(
 						"",
-					)}<td class="no-print"><button class="button button-danger button-small" data-delete-attempt="${esc(x.id)}">Delete</button></td></tr>`,
+					)}<td class="no-print nowrap"><button class="button button-secondary button-small" data-edit-attempt="${esc(x.id)}">Edit</button> <button class="button button-danger button-small" data-delete-attempt="${esc(x.id)}">Delete</button></td></tr>`,
 		)
 		.join("");
 	return `<div class="metrics">${tile("Attempts", m.list.length)}${tile("Drivers", m.drivers)}${tile(rank ? `Average: ${esc(rank.label)}` : "Ranking", rank ? (m.average === null ? "--" : fmt(m.average)) : "None set")}${tile(rank ? `Best (${m.lowerBetter ? "lowest" : "highest"})` : "Most attempts", rank ? (m.bestAttempt ? `${fmt(m.bestAttempt.score.metric)}<small style="font-size:12px;color:var(--muted);font-weight:500"> ${esc(m.bestAttempt.driverName)}</small>` : "--") : m.standings[0] ? `${m.standings[0].attempts}<small style="font-size:12px;color:var(--muted);font-weight:500"> ${esc(m.standings[0].name)}</small>` : "--", true)}</div>
   <section class="panel analysis-panel" style="margin-bottom:18px"><div class="panel-heading"><div><h3>${esc(form.title)} standings</h3><p>${rank ? `Ranked by each driver's latest attempt at "${esc(rank.label)}" (${m.lowerBetter ? "lower" : "higher"} is better).` : "No ranking question was chosen for this form, so drivers are listed by number of attempts. Edit the form to choose one."}</p></div></div><div class="table-wrap"><table><thead><tr><th>Rank</th><th>Driver</th><th>Grade</th><th>Attempts</th>${rank ? "<th>Latest</th><th>Best</th><th>Average</th>" : ""}</tr></thead><tbody>${standingsRows}</tbody></table></div></section>
   ${numericTable || choiceTables ? `<section class="panel analysis-panel" style="margin-bottom:18px"><div class="panel-heading"><div><h3>Question summaries</h3><p>Totals across every recorded attempt.</p></div></div>${numericTable}${choiceTables}</section>` : ""}
-  <section class="panel"><div class="panel-heading"><div><h3>${esc(form.title)} attempts</h3><p>Most recent first, with every answer. Deleting an attempt removes it from every analysis view.</p></div></div><div class="table-wrap"><table><thead><tr>${sheetHead}</tr></thead><tbody>${sheetRows || `<tr><td colspan="${columns.length + 4}" class="empty">No attempts recorded.</td></tr>`}</tbody></table></div></section>`;
+  <section class="panel"><div class="panel-heading"><div><h3>${esc(form.title)} attempts</h3><p>Most recent first, with every answer. Use Edit to change an attempt's answers (for example to add its course or robot). Deleting an attempt removes it from every analysis view.</p></div></div><div class="table-wrap"><table><thead><tr>${sheetHead}</tr></thead><tbody>${sheetRows || `<tr><td colspan="${columns.length + 6}" class="empty">No attempts recorded.</td></tr>`}</tbody></table></div></section>`;
 }
 
 // The same analysis as a PDF report description (see pdf.js).
-export function customReport(form, submissions) {
+export function customReport(form, submissions, courses = {}) {
 	const m = customModel(form, submissions),
 		rank = m.rankQ,
 		columns = allQuestions(form);
@@ -610,13 +627,14 @@ export function customReport(form, submissions) {
 	blocks.push({
 		title: `${form.title} attempts`,
 		orientation: "landscape",
-		head: ["Date", "Driver", "Grade", ...columns.map((q) => q.label)],
+		head: ["Date", "Driver", "Grade", "Course", "Robot", ...columns.map((q) => q.label)],
 		nowrap: [
 			0,
 			1,
 			2,
+			4,
 			...columns
-				.map((q, i) => (isNumeric(q.type) ? i + 3 : -1))
+				.map((q, i) => (isNumeric(q.type) ? i + 5 : -1))
 				.filter((i) => i >= 0),
 		],
 		body: [...m.list]
@@ -625,6 +643,8 @@ export function customReport(form, submissions) {
 				dateText(x.date),
 				x.driverName,
 				x.grade,
+				x.data?.course ? courseLabel(courses, x.data.course) : "--",
+				x.data?.robot || "--",
 				...columns.map((q) => answerText(q, x.data?.answers?.[q.id])),
 			]),
 	});

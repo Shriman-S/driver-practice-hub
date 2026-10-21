@@ -19,8 +19,11 @@ import {
 	penaltyScore,
 	accuracyScore,
 	overallFromFacets,
+	settingsFor,
 } from "./scoring.js";
 import { esc } from "./util.js";
+import { FACET_COURSE_GROUP } from "./constants.js";
+import { publishedCourses, courseLabel } from "./courses.js";
 
 const v = (name, sub = "") => `<var>${name}</var>${sub ? `<sub>${sub}</sub>` : ""}`;
 const frac = (top, bottom) => `<span class="frac"><span>${top}</span><span>${bottom}</span></span>`;
@@ -172,8 +175,8 @@ function weightSentence(items) {
 }
 
 // Everything the Analysis page needs to explain one facet: each component, the final weighted equation, and its explanation.
-export function facetDoc(facet, cfg) {
-	const settings = cfg.facets[facet];
+export function facetDoc(facet, cfg, courseKey = "") {
+	const settings = settingsFor(cfg, facet, courseKey);
 	const components = COMPONENTS[facet].map((c) => componentDoc(facet, c, settings[c.key]));
 	const terms = COMPONENTS[facet]
 		.filter((c) => Number(settings[c.key].weight) > 0)
@@ -187,9 +190,9 @@ export function facetDoc(facet, cfg) {
 }
 
 const designHtml = (text) => (text ? `<p class="eq-design"><strong>Design note:</strong> ${esc(text)}</p>` : "");
-export function facetCard(key, label, cfg) {
-	const d = facetDoc(key, cfg);
-	return `<article class="eq-card"><h4>${esc(label)}</h4>${d.components
+export function facetCard(key, label, cfg, courseKey = "", subtitle = "") {
+	const d = facetDoc(key, cfg, courseKey);
+	return `<article class="eq-card"><h4>${esc(label)}${subtitle ? ` <small class="eq-method">${esc(subtitle)}</small>` : ""}</h4>${d.components
 		.map((c) => `<div class="eq-row"><p class="eq-name">${esc(c.name)}</p><div class="eq">${c.eq}</div><p class="eq-why">${esc(c.text)}</p>${designHtml(c.design)}</div>`)
 		.join("")}<div class="eq-row eq-final"><p class="eq-name">Final score</p><div class="eq">${d.final}</div><p class="eq-why">${esc(d.why)}</p>${designHtml(d.design)}</div>${d.vars ? `<p class="eq-vars">Where ${d.vars}</p>` : ""}</article>`;
 }
@@ -281,7 +284,7 @@ const SETTING_NAMES = {
 	perPenalty: ["points lost per penalty", (x) => fmt(x)],
 	target: ["accuracy for full marks", (x) => pct(x)],
 };
-export function changesFromDefault(cfg) {
+export function changesFromDefault(cfg, courseNames = {}) {
 	const out = [];
 	for (const facet of FACET_ORDER)
 		for (const c of COMPONENTS[facet]) {
@@ -295,6 +298,20 @@ export function changesFromDefault(cfg) {
 				});
 			if (diffs.length) out.push(`${FACET_NAMES[facet]}, ${c.label}: ${diffs.join("; ")}`);
 		}
+	// Courses with their own settings: every difference from the original DriveLab scoring for that drill.
+	for (const facet of FACET_ORDER)
+		for (const [key, own] of Object.entries(cfg.byCourse?.[facet] || {})) {
+			const name = courseNames?.[key] || `Course ${key.split("-")[1]}`;
+			const diffs = [];
+			for (const c of COMPONENTS[facet]) {
+				const was = DEFAULT_SCORING.facets[facet][c.key];
+				const parts = Object.keys(was)
+					.filter((k) => own[c.key][k] !== was[k])
+					.map((k) => `${SETTING_NAMES[k][0]} ${SETTING_NAMES[k][1](own[c.key][k])}`);
+				if (parts.length) diffs.push(`${c.label}: ${parts.join("; ")}`);
+			}
+			out.push(`${FACET_NAMES[facet]}, ${name} has its own settings${diffs.length ? ` (${diffs.join(" · ")})` : " (currently the same as the original scoring)"}`);
+		}
 	const o = cfg.overall,
 		d = DEFAULT_SCORING.overall;
 	if (o.method !== d.method) out.push(`Overall ranking method: ${OVERALL_METHODS[o.method].label} (was ${OVERALL_METHODS[d.method].label})`);
@@ -302,8 +319,8 @@ export function changesFromDefault(cfg) {
 	if (!same(o.weights, d.weights)) out.push(`Overall facet weights: ${weightList(cfg)} (was 25% each)`);
 	return out;
 }
-function changesHtml(cfg) {
-	const changes = changesFromDefault(cfg);
+function changesHtml(cfg, courseNames) {
+	const changes = changesFromDefault(cfg, courseNames);
 	const when = cfg.updatedAt
 		? ` Last changed ${new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(cfg.updatedAt))}.`
 		: "";
@@ -314,14 +331,28 @@ function changesHtml(cfg) {
 
 const CLAMP_NOTE = `<p class="eq-note"><strong>clamp(x)</strong> limits a value to the range 0 to 10 (<strong>clamp<sub>0–1</sub></strong> limits it to 0 to 1), so one unusually large or small number cannot push a component past full marks or below zero. Every score is rounded to two decimals.</p>`;
 
-// Analysis tab, single facet view: that facet's equations.
-export function facetEquationsHtml(key, label, cfg = DEFAULT_SCORING) {
-	return `<section class="panel equations" style="margin-top:18px"><div class="panel-heading"><div><h3>How the ${esc(label)} score is calculated</h3><p>Each part is scored out of 10, then the parts are combined with the weights below into the final score out of 10. This explanation is generated from the current scoring settings.</p></div></div><div class="eq-body">${changesHtml(cfg)}${facetCard(key, label, cfg)}${CLAMP_NOTE}</div></section>`;
+// Which settings apply to which courses for one drill: the default card (with the courses that use it) and one card per course that
+// has its own settings. `courses` is state.data.courses (for course names).
+export function facetCourseCards(facet, label, cfg, courses = {}) {
+	const own = cfg.byCourse?.[facet] || {};
+	const published = publishedCourses(courses, FACET_COURSE_GROUP[facet]);
+	const usingDefault = ["attempts with no course recorded", ...published.filter((c) => !own[c.key]).map((c) => c.name)];
+	const ownKeys = Object.keys(own).sort();
+	const cards = [facetCard(facet, label, cfg, "", ownKeys.length || published.length ? `Default settings: used by ${list(usingDefault)}` : "")];
+	for (const key of ownKeys) cards.push(facetCard(facet, label, cfg, key, `${courseLabel(courses, key)} (its own settings)`));
+	return cards.join("");
+}
+export const courseNameMap = (courses = {}) =>
+	Object.fromEntries(Object.keys(courses).map((key) => [key, courseLabel(courses, key)]));
+
+// Analysis tab, single facet view: that facet's equations (one card per set of settings in use).
+export function facetEquationsHtml(key, label, cfg = DEFAULT_SCORING, courses = {}) {
+	return `<section class="panel equations" style="margin-top:18px"><div class="panel-heading"><div><h3>How the ${esc(label)} score is calculated</h3><p>Each part is scored out of 10, then the parts are combined with the weights below into the final score out of 10. Each course can have its own settings; an attempt is scored with the settings of the course it was driven on. This explanation is generated from the current scoring settings.</p></div></div><div class="eq-body">${changesHtml(cfg, courseNameMap(courses))}<div class="eq-grid">${facetCourseCards(key, label, cfg, courses)}</div>${CLAMP_NOTE}</div></section>`;
 }
 
-// Analysis tab, General statistics view: the overall ranking formula and all four facet formulas.
-export function allEquationsHtml(facets, cfg = DEFAULT_SCORING) {
-	return `<section class="panel equations" style="margin-top:18px"><div class="panel-heading"><div><h3>Scoring equations</h3><p>How every score on this page is calculated. This explanation is generated from the current scoring settings, so it updates whenever an administrator changes them.</p></div></div><div class="eq-body">${changesHtml(cfg)}${overallCard(cfg)}<div class="eq-grid">${Object.entries(facets)
-		.map(([key, label]) => facetCard(key, label, cfg))
-		.join("")}</div>${CLAMP_NOTE}</div></section>`;
+// Analysis tab, General statistics view: the overall ranking formula and every drill's formulas (grouped by drill).
+export function allEquationsHtml(facets, cfg = DEFAULT_SCORING, courses = {}) {
+	return `<section class="panel equations" style="margin-top:18px"><div class="panel-heading"><div><h3>Scoring equations</h3><p>How every score on this page is calculated. This explanation is generated from the current scoring settings, so it updates whenever an administrator changes them. Each drill's courses can have their own settings.</p></div></div><div class="eq-body">${changesHtml(cfg, courseNameMap(courses))}${overallCard(cfg)}${Object.entries(facets)
+		.map(([key, label]) => `<details class="eq-facet" open><summary>${esc(label)}</summary><div class="eq-grid">${facetCourseCards(key, label, cfg, courses)}</div></details>`)
+		.join("")}${CLAMP_NOTE}</div></section>`;
 }

@@ -1,7 +1,10 @@
 // Scoring for the four built-in drills and the coverage-first overall ranking.
 //
 // Every number that shapes a score (weights, benchmarks, curves, penalty costs, how the overall ranking is built) lives in a
-// SCORING SETTINGS object. Administrators change it on the Scoring settings page (scoringeditor.js); it is saved in Firestore as
+// SCORING SETTINGS object. Each drill has DEFAULT settings (cfg.facets[facet]) and may have its OWN settings for each course
+// (cfg.byCourse[facet][courseKey], e.g. cfg.byCourse.speed["speed-2"]), because courses take different amounts of time while
+// assessing the same skills. An attempt is scored with its course's settings; an attempt with no course recorded, or on a course
+// without its own settings, uses the drill's default settings (settingsFor()). Administrators change it on the Scoring settings page (scoringeditor.js); it is saved in Firestore as
 // settings/scoring and read by everyone, so a guest's on-the-spot score uses the same rules the Analysis page shows.
 // DEFAULT_SCORING reproduces the original DriveLab scoring exactly (see driver-scoring-functions.pdf).
 //
@@ -106,25 +109,42 @@ export const DEFAULT_SCORING = {
 		attempt: "latest",
 		weights: { speed: 25, defense: 25, offense: 25, shooting: 25 },
 	},
+	// Per-course settings, same shape as facets[facet]. Empty means every course uses its drill's default settings.
+	byCourse: { speed: {}, defense: {}, offense: {}, shooting: {} },
 };
+// Course ids look like "speed-1" ... "shooting-3"; defense and offense both use the "defense-N" (paired drill) courses.
+export const COURSE_KEY = /^(speed|defense|shooting)-[1-3]$/;
+// The settings that score an attempt of `facet` driven on `courseKey`.
+export function settingsFor(config, facet, courseKey) {
+	return (courseKey && config.byCourse?.[facet]?.[courseKey]) || config.facets[facet];
+}
 const copy = (value) => JSON.parse(JSON.stringify(value));
 
 // Fills anything missing (or of the wrong type) from the defaults, so an older or partial saved object can never break scoring.
+// One drill's settings: everything missing (or of the wrong type) is taken from `base`.
+function normalizeFacet(facet, from, base) {
+	const out = copy(base);
+	if (!from || typeof from !== "object") return out;
+	for (const c of COMPONENTS[facet]) {
+		const src = from[c.key];
+		if (!src) continue;
+		const into = out[c.key];
+		for (const key of Object.keys(into)) {
+			if (key === "curve") {
+				if (CURVES[src.curve]) into.curve = src.curve;
+			} else if (Number.isFinite(Number(src[key])) && src[key] !== "" && src[key] !== null) into[key] = Number(src[key]);
+		}
+	}
+	return out;
+}
 export function normalizeScoring(saved) {
 	const out = copy(DEFAULT_SCORING);
 	if (!saved || typeof saved !== "object") return out;
+	for (const facet of FACET_ORDER) out.facets[facet] = normalizeFacet(facet, saved.facets?.[facet], DEFAULT_SCORING.facets[facet]);
 	for (const facet of FACET_ORDER)
-		for (const c of COMPONENTS[facet]) {
-			const from = saved.facets?.[facet]?.[c.key];
-			if (!from) continue;
-			const into = out.facets[facet][c.key];
-			for (const key of Object.keys(into)) {
-				if (key === "curve") {
-					if (CURVES[from.curve]) into.curve = from.curve;
-				} else if (Number.isFinite(Number(from[key])) && from[key] !== "" && from[key] !== null)
-					into[key] = Number(from[key]);
-			}
-		}
+		for (const [key, value] of Object.entries(saved.byCourse?.[facet] || {}))
+			if (COURSE_KEY.test(key) && value && typeof value === "object")
+				out.byCourse[facet][key] = normalizeFacet(facet, value, out.facets[facet]);
 	const o = saved.overall || {};
 	if (OVERALL_METHODS[o.method]) out.overall.method = o.method;
 	if (ATTEMPT_RULES[o.attempt]) out.overall.attempt = o.attempt;
@@ -140,11 +160,11 @@ export function validateScoring(cfg) {
 	const problems = [];
 	const bad = (v) => v === "" || v === null || v === undefined || !Number.isFinite(Number(v));
 	const facetNames = { speed: "Speed driving", defense: "Defensive driving", offense: "Offensive driving", shooting: "Shooting only" };
-	for (const facet of FACET_ORDER) {
+	const checkSet = (facet, settings, title) => {
 		let total = 0;
 		for (const c of COMPONENTS[facet]) {
-			const s = cfg.facets[facet][c.key];
-			const where = `${facetNames[facet]}, ${c.label}`;
+			const s = settings[c.key];
+			const where = `${title}, ${c.label}`;
 			if (bad(s.weight) || s.weight < 0 || s.weight > 100) problems.push(`${where}: the weight must be a number from 0 to 100.`);
 			total += Number(s.weight) || 0;
 			if (c.kind === "range") {
@@ -162,7 +182,12 @@ export function validateScoring(cfg) {
 				problems.push(`${where}: the accuracy for full marks must be from 1% to 100%.`);
 		}
 		if (Math.abs(total - 100) > 0.001)
-			problems.push(`${facetNames[facet]}: the weights add up to ${round(total)}%. They must add up to exactly 100%.`);
+			problems.push(`${title}: the weights add up to ${round(total)}%. They must add up to exactly 100%.`);
+	};
+	for (const facet of FACET_ORDER) {
+		checkSet(facet, cfg.facets[facet], `${facetNames[facet]} (default)`);
+		for (const [key, settings] of Object.entries(cfg.byCourse?.[facet] || {}))
+			checkSet(facet, settings, `${facetNames[facet]}, Course ${key.split("-")[1]}`);
 	}
 	let total = 0;
 	for (const facet of FACET_ORDER) {
@@ -211,10 +236,11 @@ export function componentScore(component, settings, d) {
 export function scoreSubmission(submission, config = DEFAULT_SCORING) {
 	const facet = COMPONENTS[submission.facet] ? submission.facet : "shooting";
 	const d = submission.data || {};
+	const settings = settingsFor(config, facet, d.course); // the course's own settings, or the drill's default
 	const parts = {};
 	let final = 0;
 	for (const c of COMPONENTS[facet]) {
-		const s = config.facets[facet][c.key];
+		const s = settings[c.key];
 		const value = componentScore(c, s, d);
 		parts[c.key] = value;
 		final += (s.weight / 100) * value;

@@ -24,13 +24,38 @@ import {
 	validateScoring,
 	scoreSubmission,
 	driverSummary,
+	settingsFor,
 } from "./scoring.js";
-import { facetCard, overallCard, bandsTableHtml, changesFromDefault, FACET_NAMES, fmt } from "./formulas.js";
+import { facetCard, overallCard, bandsTableHtml, changesFromDefault, courseNameMap, FACET_NAMES, fmt } from "./formulas.js";
+import { FACET_COURSE_GROUP } from "./constants.js";
+import { publishedCourses, courseLabel } from "./courses.js";
 
 const clone = (value) => JSON.parse(JSON.stringify(value));
 const two = (n) => (Number.isFinite(Number(n)) ? Number(n).toFixed(2) : "--");
 const TABS = [["overall", "General statistics"], ...FACET_ORDER.map((k) => [k, FACET_NAMES[k]])];
 const SHORT = { speed: "Speed", defense: "Defense", offense: "Offense", shooting: "Shooting" };
+
+// ---------------------------------------------------------------- courses
+// Each drill tab edits one set of settings at a time: the drill's DEFAULT settings ("" = attempts with no course recorded, and any
+// course without its own settings) or one course's own settings. A course gets its own copy of the settings the first time one of
+// its values is changed; until then it uses the default settings.
+const currentCourse = (state) => state.scoringCourse?.[state.scoringTab] || "";
+// Courses to offer for a drill: the published ones, plus any that still have saved settings (for example a deleted course).
+function courseChoices(state, facet) {
+	const courses = state.data.courses || {};
+	const list = publishedCourses(courses, FACET_COURSE_GROUP[facet]);
+	for (const key of Object.keys(state.scoringDraft.byCourse?.[facet] || {}))
+		if (!list.some((c) => c.key === key)) list.push({ key, number: Number(key.split("-")[1]), name: courseLabel(courses, key) });
+	return list.sort((a, b) => a.number - b.number);
+}
+const hasOwn = (draft, facet, key) => Boolean(key && draft.byCourse?.[facet]?.[key]);
+const basePath = (facet, key) => (key ? `byCourse.${facet}.${key}` : `facets.${facet}`);
+// Give a course its own copy of the settings (from the default) before its first change.
+function materialize(draft, facet, key) {
+	draft.byCourse ??= { speed: {}, defense: {}, offense: {}, shooting: {} };
+	draft.byCourse[facet] ??= {};
+	if (key && !draft.byCourse[facet][key]) draft.byCourse[facet][key] = clone(draft.facets[facet]);
+}
 
 // ---------------------------------------------------------------- example data
 // The raw answers each drill's score reads (the numeric questions on the built-in forms).
@@ -140,8 +165,8 @@ const totalHtml = (total) => {
 	const ok = Math.abs(total - 100) < 0.001;
 	return `<span class="sc-total ${ok ? "ok" : "bad"}">Total: ${fmt(total)}%${ok ? " ✓" : " (must be 100%)"}</span>`;
 };
-function componentEditor(facet, c, s) {
-	const base = `facets.${facet}.${c.key}`;
+function componentEditor(facet, c, s, prefix) {
+	const base = `${prefix}.${c.key}`;
 	let body = "";
 	if (c.kind === "range") {
 		const time = c.unit === "s" && facet === "speed";
@@ -156,11 +181,34 @@ function componentEditor(facet, c, s) {
 		body = `<div class="sc-grid"><label class="b-field sc-wide"><span>Accuracy for full marks (%)</span>${numberInput(`${base}.target`, s.target, { min: 1, max: 100, step: "any", label: "Accuracy for full marks" })}<small class="help">100 means only perfect shooting earns 10. 80 means 80% accuracy or better earns 10.</small></label></div>`;
 	return `<div class="sc-comp"><div class="sc-comp-head"><strong>${esc(c.label)}</strong><span class="sc-symbol">${esc(c.symbol)}</span></div>${weightControl(`${base}.weight`, s.weight, c.label)}${body}</div>`;
 }
-function facetSettingsHtml(facet, draft) {
-	const total = COMPONENTS[facet].reduce((t, c) => t + (Number(draft.facets[facet][c.key].weight) || 0), 0);
-	return `<div class="panel-heading"><div><h3>${esc(FACET_NAMES[facet])} score</h3><p>Each part is scored out of 10; the weights decide how much each part counts in the final score.</p></div></div><div class="sc-body">${COMPONENTS[facet]
-		.map((c) => componentEditor(facet, c, draft.facets[facet][c.key]))
-		.join("")}<div class="sc-total-row" id="sc-total">${totalHtml(total)}<button type="button" class="button button-secondary button-small" data-sc-balance="facets.${facet}">Make weights add up to 100%</button><button type="button" class="button button-secondary button-small" data-sc-default="${facet}">Use original ${esc(SHORT[facet])} settings</button></div></div>`;
+function courseBarHtml(state, facet) {
+	const draft = state.scoringDraft,
+		key = currentCourse(state),
+		choices = courseChoices(state, facet);
+	const pill = (k, label, own) =>
+		`<button type="button" class="sc-course ${k === key ? "active" : ""}" data-sc-course="${esc(k)}" aria-pressed="${k === key}">${esc(label)}${own ? '<span class="sc-own">own settings</span>' : ""}</button>`;
+	const copyFrom = [["", "Default settings"], ...choices.filter((c) => hasOwn(draft, facet, c.key)).map((c) => [c.key, c.name])].filter(([k]) => k !== key);
+	const note = !key
+		? `These default settings score ${esc(FACET_NAMES[facet])} attempts with no course recorded${choices.some((c) => !hasOwn(draft, facet, c.key)) ? `, and these courses until they are given their own settings: ${esc(choices.filter((c) => !hasOwn(draft, facet, c.key)).map((c) => c.name).join(", "))}` : ""}.`
+		: hasOwn(draft, facet, key)
+			? `${esc(courseLabel(state.data.courses, key))} has its own settings. Changes here affect only attempts driven on this course.`
+			: `${esc(courseLabel(state.data.courses, key))} currently uses the default settings. Change any value below to give this course its own settings.`;
+	return `<div class="sc-courses"><div class="sc-courses-head"><strong>Course</strong><span class="help">Each course can be scored with its own values.${choices.length ? "" : " No courses have been published for this drill yet (Course builder)."}</span></div><div class="sc-course-list" role="group" aria-label="Choose a course">${pill("", "Default (no course recorded)", false)}${choices.map((c) => pill(c.key, `Course ${c.number}: ${c.name}`, hasOwn(draft, facet, c.key))).join("")}</div><p class="sc-course-note">${note}</p>${
+		key
+			? `<div class="sc-course-tools">${copyFrom.length ? `<label class="sc-copy"><span>Copy values from</span><select id="sc-copy-from">${copyFrom.map(([k, label]) => `<option value="${esc(k)}">${esc(label)}</option>`).join("")}</select></label><button type="button" class="button button-secondary button-small" id="sc-copy">Copy</button>` : ""}${hasOwn(draft, facet, key) ? `<button type="button" class="button button-secondary button-small" id="sc-use-default">Use the default settings for this course</button>` : ""}</div>`
+			: ""
+	}</div>`;
+}
+function facetSettingsHtml(facet, state) {
+	const draft = state.scoringDraft,
+		key = currentCourse(state),
+		settings = settingsFor(draft, facet, key),
+		prefix = basePath(facet, key);
+	const total = COMPONENTS[facet].reduce((t, c) => t + (Number(settings[c.key].weight) || 0), 0);
+	const title = key ? `${FACET_NAMES[facet]} score: ${courseLabel(state.data.courses, key)}` : `${FACET_NAMES[facet]} score: default settings`;
+	return `<div class="panel-heading"><div><h3>${esc(title)}</h3><p>Each part is scored out of 10; the weights decide how much each part counts in the final score.</p></div></div><div class="sc-body">${courseBarHtml(state, facet)}${COMPONENTS[facet]
+		.map((c) => componentEditor(facet, c, settings[c.key], prefix))
+		.join("")}<div class="sc-total-row" id="sc-total">${totalHtml(total)}<button type="button" class="button button-secondary button-small" data-sc-balance="${prefix}">Make weights add up to 100%</button><button type="button" class="button button-secondary button-small" data-sc-default="${facet}">Use original ${esc(SHORT[facet])} values</button></div></div>`;
 }
 function overallSettingsHtml(draft) {
 	const o = draft.overall;
@@ -185,11 +233,13 @@ function previewHtml(state) {
 	const cfg = usable(state.scoringDraft);
 	if (!cfg) return `<p class="notice">Fix the problems listed at the top of the page to see the preview.</p>`;
 	const tab = state.scoringTab;
-	const changes = changesFromDefault(cfg);
+	const changes = changesFromDefault(cfg, courseNameMap(state.data.courses));
 	const changed = changes.length
 		? `<div class="eq-changes"><p><strong>Differences from the original DriveLab scoring</strong> (listed on the Analysis page):</p><ul>${changes.map((c) => `<li>${esc(c)}</li>`).join("")}</ul></div>`
 		: `<p class="eq-note">These are the original DriveLab scoring settings.</p>`;
-	return `${changed}${tab === "overall" ? `${overallCard(cfg)}<h4 class="sc-sub">Possible overall score by facets completed</h4>${bandsTableHtml(cfg)}` : facetCard(tab, FACET_NAMES[tab], cfg)}`;
+	const key = currentCourse(state);
+	const subtitle = key ? (hasOwn(state.scoringDraft, tab, key) ? `${courseLabel(state.data.courses, key)} (its own settings)` : `${courseLabel(state.data.courses, key)} (uses the default settings)`) : "Default settings";
+	return `${changed}${tab === "overall" ? `${overallCard(cfg)}<h4 class="sc-sub">Possible overall score by facets completed</h4>${bandsTableHtml(cfg)}` : facetCard(tab, FACET_NAMES[tab], cfg, key, subtitle)}`;
 }
 
 // Example attempts for one drill: raw answers (editable), each part's new score, and the final score now vs. with the draft.
@@ -259,7 +309,7 @@ function refreshExampleResults(state) {
 		return;
 	}
 	state.scoringExamples.facets[tab].forEach((r, i) => {
-		const sub = { facet: tab, data: r };
+		const sub = { facet: tab, data: { ...r, course: currentCourse(state) } }; // scored with the selected course's settings
 		const b = scoreSubmission(sub, saved);
 		const a = next ? scoreSubmission(sub, next) : null;
 		COMPONENTS[tab].forEach((c) => put(`${i}-${c.key}`, a ? two(a[c.key]) : "--"));
@@ -314,10 +364,10 @@ export function renderScoringEditor(ctx) {
 <div id="sc-errors"></div>
 <div class="sc-tabs" role="tablist">${TABS.map(([k, label]) => `<button type="button" role="tab" class="sc-tab ${tab === k ? "active" : ""}" aria-selected="${tab === k}" data-sc-tab="${k}">${esc(label)}</button>`).join("")}</div>
 <div class="sc-layout">
-  <section class="panel sc-settings" id="sc-settings">${tab === "overall" ? overallSettingsHtml(draft) : facetSettingsHtml(tab, draft)}</section>
+  <section class="panel sc-settings" id="sc-settings">${tab === "overall" ? overallSettingsHtml(draft) : facetSettingsHtml(tab, state)}</section>
   <section class="panel sc-preview"><div class="panel-heading"><div><h3>Live preview of the Analysis page</h3><p>Generated automatically from the settings on the left. This is the explanation administrators will see on the Analysis page after saving.</p></div></div><div class="eq-body" id="sc-preview">${previewHtml(state)}</div></section>
 </div>
-<section class="panel sc-examples"><div class="panel-heading"><div><h3>${tab === "overall" ? "Example drivers" : `Example ${esc(FACET_NAMES[tab])} attempts`}</h3><p><strong>Current</strong> uses the saved settings; <strong>New</strong> uses the settings on this page. Edit any example, or add your own, to see how the change affects scores.</p></div><div class="item-actions"><button type="button" class="button button-secondary button-small" id="ex-add">Add example</button><button type="button" class="button button-secondary button-small" id="ex-reset">Reset examples</button></div></div><div class="sc-examples-body">${tab === "overall" ? overallExamplesHtml(state) : facetExamplesHtml(state, tab)}</div></section>
+<section class="panel sc-examples"><div class="panel-heading"><div><h3>${tab === "overall" ? "Example drivers" : `Example ${esc(FACET_NAMES[tab])} attempts${currentCourse(state) ? ` on ${esc(courseLabel(state.data.courses, currentCourse(state)))}` : " (default settings)"}`}</h3><p><strong>Current</strong> uses the saved settings; <strong>New</strong> uses the settings on this page${tab === "overall" ? "" : " for the course selected above"}. Edit any example, or add your own, to see how the change affects scores.</p></div><div class="item-actions"><button type="button" class="button button-secondary button-small" id="ex-add">Add example</button><button type="button" class="button button-secondary button-small" id="ex-reset">Reset examples</button></div></div><div class="sc-examples-body">${tab === "overall" ? overallExamplesHtml(state) : facetExamplesHtml(state, tab)}</div></section>
 <section class="panel sc-examples"><div class="panel-heading"><div><h3>Effect on recorded ${tab === "overall" ? "drivers" : "attempts"}</h3><p>${tab === "overall" ? "The real leaderboard re-scored with the settings on this page (all drills and the overall ranking)." : "The real attempts for this drill, re-scored with the settings on this page."}</p></div></div><div class="sc-examples-body" id="sc-impact">${impactHtml(state)}</div></section>`;
 }
 
@@ -342,7 +392,7 @@ export function bindScoringEditor(ctx) {
 		const total =
 			state.scoringTab === "overall"
 				? FACET_ORDER.reduce((t, k) => t + (Number(state.scoringDraft.overall.weights[k]) || 0), 0)
-				: COMPONENTS[state.scoringTab].reduce((t, c) => t + (Number(state.scoringDraft.facets[state.scoringTab][c.key].weight) || 0), 0);
+				: COMPONENTS[state.scoringTab].reduce((t, c) => t + (Number(settingsFor(state.scoringDraft, state.scoringTab, currentCourse(state))[c.key].weight) || 0), 0);
 		const totalBox = document.querySelector("#sc-total .sc-total");
 		if (totalBox) totalBox.outerHTML = totalHtml(total);
 		document.querySelector("#sc-preview").innerHTML = previewHtml(state);
@@ -361,6 +411,12 @@ export function bindScoringEditor(ctx) {
 		const el = e.target.closest("[data-sc]");
 		if (!el) return;
 		const path = el.dataset.sc;
+		const parts = path.split(".");
+		if (parts[0] === "byCourse") {
+			const first = !hasOwn(state.scoringDraft, parts[1], parts[2]);
+			materialize(state.scoringDraft, parts[1], parts[2]); // the course's first change gives it its own settings
+			if (first) setTimeout(refreshCourseBar); // show the "own settings" badge and tools without losing focus
+		}
 		const textual = path.endsWith(".curve") || path === "overall.method" || path === "overall.attempt";
 		const value = textual ? el.value : el.value === "" ? "" : Number(el.value);
 		setPath(state.scoringDraft, path, value);
@@ -378,6 +434,8 @@ export function bindScoringEditor(ctx) {
 		(b) =>
 			(b.onclick = () => {
 				const path = b.dataset.scBalance;
+				const bits = path.split(".");
+				if (bits[0] === "byCourse") materialize(state.scoringDraft, bits[1], bits[2]);
 				const group = getPath(state.scoringDraft, path);
 				const flat = path === "overall.weights"; // { speed: 25, ... } rather than { time: { weight: 70 }, ... }
 				const keys = Object.keys(group);
@@ -397,13 +455,52 @@ export function bindScoringEditor(ctx) {
 		(b) =>
 			(b.onclick = () => {
 				const k = b.dataset.scDefault;
+				const course = currentCourse(state);
 				if (k === "overall") state.scoringDraft.overall = clone(DEFAULT_SCORING.overall);
-				else state.scoringDraft.facets[k] = clone(DEFAULT_SCORING.facets[k]);
+				else if (course) {
+					materialize(state.scoringDraft, k, course);
+					state.scoringDraft.byCourse[k][course] = clone(DEFAULT_SCORING.facets[k]);
+				} else state.scoringDraft.facets[k] = clone(DEFAULT_SCORING.facets[k]);
 				markDirty();
 				redraw();
 			}),
 	);
 
+	// Course picker and its tools (drill tabs only). refreshCourseBar() redraws only this bar, so typing is never interrupted.
+	const bindCourseBar = (root) => {
+		root.querySelectorAll("[data-sc-course]").forEach(
+			(b) =>
+				(b.onclick = () => {
+					state.scoringCourse = { ...(state.scoringCourse || {}), [state.scoringTab]: b.dataset.scCourse };
+					redraw();
+				}),
+		);
+		root.querySelector("#sc-copy")?.addEventListener("click", () => {
+			const facet = state.scoringTab,
+				key = currentCourse(state),
+				from = document.querySelector("#sc-copy-from").value;
+			materialize(state.scoringDraft, facet, key);
+			state.scoringDraft.byCourse[facet][key] = clone(settingsFor(state.scoringDraft, facet, from));
+			markDirty();
+			redraw();
+		});
+		root.querySelector("#sc-use-default")?.addEventListener("click", () => {
+			const facet = state.scoringTab,
+				key = currentCourse(state);
+			if (!confirm("Remove this course's own settings? Its attempts will be scored with the default settings (after you save).")) return;
+			delete state.scoringDraft.byCourse[facet][key];
+			markDirty();
+			redraw();
+		});
+	};
+	const refreshCourseBar = () => {
+		const bar = document.querySelector(".sc-courses");
+		if (!bar || state.scoringTab === "overall") return;
+		bar.outerHTML = courseBarHtml(state, state.scoringTab);
+		bindCourseBar(document.querySelector(".sc-courses"));
+	};
+	const courseBar = document.querySelector(".sc-courses");
+	if (courseBar) bindCourseBar(courseBar);
 	document.querySelectorAll("[data-sc-tab]").forEach(
 		(b) =>
 			(b.onclick = () => {

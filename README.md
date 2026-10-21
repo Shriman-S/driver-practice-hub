@@ -6,14 +6,18 @@ DriveLab is a no-cost, GitHub Pages-ready FRC driver-practice tracker. It is des
 
 - **Four ready-to-use assessment forms**
   - Speed, defense, offense, and shooting-only forms include the supplied questions, native stopwatch/countdown controls, coaching observations, and their documented scoring weights.
+  - Every form (including custom forms) asks which **course** was driven (a dropdown of that drill's published courses) and which **robot** was driven (REBUILT Robot, REEFSCAPE Robot, or Swerve Chassis).
 - **Paired defensive/offensive workflow**
   - Defense and offense are recorded as separate assessments for the two drivers in one 90-second paired session, preserving individual data.
 - **Private name convenience**
   - The most recent name is remembered only in the current browser, reducing repetitive typing without publishing a list of students.
 - **Administrator-only analysis**
-  - A spreadsheet-style facet table, score bars, and coverage-first leaderboard compare drivers while keeping raw submissions unreadable to regular users.
+  - A spreadsheet-style facet table, score bars, and coverage-first leaderboard (with each driver's number of attempts) compare drivers while keeping raw submissions unreadable to regular users.
+  - Every list of recorded attempts can be searched (driver, course, robot, notes, date, answers, and more) and filtered (drill, grade, robot, course, observations, edited, or missing course/robot). An **Enlarge** button shows the list over the page with every response and detail.
+  - Administrators can **Edit** any recorded attempt in a pop-up that shows the form the driver completed with their answers, including questions added to the form later (for example, adding the course to older attempts). **Revert to original** restores the values first submitted.
   - The Analysis page shows the scoring equations for the overall ranking and every facet. The equations and their explanations are generated automatically from the current scoring settings, so they always describe the formula in use.
 - **Scoring settings (administrators)**
+  - Each course can have its own scoring values (for example, a longer Speed driving course can have a slower "excellent" time); attempts are scored with the settings of the course they were driven on, and attempts with no course recorded use the drill's default settings.
   - Change every drill's scoring without typing formulas: a weight for each part, the "full marks" and "zero points" benchmarks, a scoring curve, points lost per penalty, pace strictness, and the accuracy needed for full marks. For General statistics, choose the overall ranking method (coverage first, average of completed facets, or missing facets count as zero), which attempt counts (most recent, best, or average), and the facet weights.
   - A live preview shows exactly what the Analysis page will say. Editable example attempts and example drivers show each score with the saved settings and with the new ones side by side, and the page shows how the change would affect the drivers already recorded. Saving re-scores every recorded attempt from its raw answers.
   - An administrator stays signed in when the page is refreshed, and is signed out by **Log out** or by closing the tab.
@@ -31,7 +35,7 @@ DriveLab is a no-cost, GitHub Pages-ready FRC driver-practice tracker. It is des
 - **Download PDF**
   - The Analysis page's **Download PDF** button downloads a formatted, dated report of the selected view (general statistics, one drill, or one custom form): a portrait summary page followed by landscape pages for the leaderboard and attempts spreadsheet. It uses the free, MIT-licensed jsPDF libraries bundled in `js/vendor/`, so no paid service or internet connection is needed.
 - **Form builder (custom forms)**
-  - Administrators build forms with a title and description, sections, and questions (number, short text, paragraph, multiple choice, checkboxes, dropdown, rating scale), each with an optional description, plus stopwatch and countdown tools. Saved forms appear on the **Practice form** tab for everyone.
+  - Administrators build forms with a title and description, a choice of which courses the Course driven question lists, sections, and questions (number, short text, paragraph, multiple choice, checkboxes, dropdown, rating scale), each with an optional description, plus stopwatch and countdown tools. Saved forms appear on the **Practice form** tab for everyone.
   - Every custom form gets its own Analysis page (driver standings ranked by a number or scale question the administrator picks, question summaries, and a spreadsheet of all attempts) and its own PDF. Custom forms never count toward the four-facet leaderboard.
 - **GitHub Pages**
   - Static hosting is free and the repository has no build step, package manager, paid library, or API key requirement for the preview.
@@ -72,6 +76,8 @@ Do not treat the local preview, a GitHub repository, or a hidden front-end tab a
 | `google-apps-script/DriveLabCalendarSync.gs` | The Google Apps Script the team calendar's owner deploys as the "sync link". It accepts requests only from signed-in DriveLab administrators and writes only to the team calendar. |
 | `js/storage.js` | Local-preview and protected Firebase storage adapter. |
 | `js/app.js` | Routed UI, built-in forms and timers, calendar, and analysis. |
+| `js/fields.js` | Draws the questions of the built-in forms (shared by the Practice form and the Edit attempt pop-up), including the Course and Robot dropdowns. |
+| `js/attempts.js` | Analysis attempt lists: search, filters, the enlarged view, and the Edit attempt pop-up. |
 | `js/util.js` | Small shared helpers (escaping, dates, text blocks). |
 | `js/customforms.js` | Custom form data model, the form students fill in, timer tools, and custom analytics. |
 | `js/formbuilder.js` | The administrator's Form builder editor. |
