@@ -21,7 +21,6 @@ export const COURSE_GROUPS = [
 		label: "Defensive + Offensive driving",
 		note: "Shared by the paired drill",
 	},
-	{ key: "shooting", label: "Shooting only", note: "Independent course" },
 ];
 export const courseKey = (group, number) => `${group}-${number}`;
 const groupOf = (key) =>

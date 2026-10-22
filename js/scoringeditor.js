@@ -33,7 +33,7 @@ import { publishedCourses, courseLabel } from "./courses.js";
 const clone = (value) => JSON.parse(JSON.stringify(value));
 const two = (n) => (Number.isFinite(Number(n)) ? Number(n).toFixed(2) : "--");
 const TABS = [["overall", "General statistics"], ...FACET_ORDER.map((k) => [k, FACET_NAMES[k]])];
-const SHORT = { speed: "Speed", defense: "Defense", offense: "Offense", shooting: "Shooting" };
+const SHORT = { speed: "Speed", defense: "Defense", offense: "Offense" };
 
 // ---------------------------------------------------------------- courses
 // Each drill tab edits one set of settings at a time: the drill's DEFAULT settings ("" = attempts with no course recorded, and any
@@ -52,7 +52,7 @@ const hasOwn = (draft, facet, key) => Boolean(key && draft.byCourse?.[facet]?.[k
 const basePath = (facet, key) => (key ? `byCourse.${facet}.${key}` : `facets.${facet}`);
 // Give a course its own copy of the settings (from the default) before its first change.
 function materialize(draft, facet, key) {
-	draft.byCourse ??= { speed: {}, defense: {}, offense: {}, shooting: {} };
+	draft.byCourse ??= { speed: {}, defense: {}, offense: {} };
 	draft.byCourse[facet] ??= {};
 	if (key && !draft.byCourse[facet][key]) draft.byCourse[facet][key] = clone(draft.facets[facet]);
 }
@@ -83,21 +83,14 @@ export const DEFAULT_EXAMPLES = {
 			{ label: "Great evader", fuelShot: 10, fuelScored: 8, evasions: 6 },
 			{ label: "Shut down", fuelShot: 5, fuelScored: 1, evasions: 0 },
 		],
-		shooting: [
-			{ label: "Benchmark run", fuelShot: 30, fuelScored: 20, penalties: 0 },
-			{ label: "Accurate, lower volume", fuelShot: 20, fuelScored: 18, penalties: 1 },
-			{ label: "High volume, inaccurate", fuelShot: 40, fuelScored: 15, penalties: 0 },
-			{ label: "Careful, few shots", fuelShot: 12, fuelScored: 10, penalties: 3 },
-			{ label: "Struggling", fuelShot: 25, fuelScored: 5, penalties: 0 },
-		],
 	},
 	// Example drivers for the overall ranking: facet scores out of 10, oldest attempt first, separated by commas (blank = not done).
 	overall: [
-		{ label: "Driver A (one perfect facet)", speed: "10", defense: "", offense: "", shooting: "" },
-		{ label: "Driver B (well-rounded)", speed: "6", defense: "6", offense: "6", shooting: "6" },
-		{ label: "Improving driver", speed: "4, 7", defense: "5, 8", offense: "6", shooting: "" },
-		{ label: "Specialist", speed: "9.5", defense: "", offense: "", shooting: "9" },
-		{ label: "Inconsistent driver", speed: "9, 3", defense: "8, 4", offense: "7, 2", shooting: "6, 6" },
+		{ label: "Driver A (one perfect facet)", speed: "10", defense: "", offense: "" },
+		{ label: "Driver B (well-rounded)", speed: "6", defense: "6", offense: "6" },
+		{ label: "Improving driver", speed: "4, 7", defense: "5, 8", offense: "" },
+		{ label: "Specialist", speed: "9.5", defense: "", offense: "9" },
+		{ label: "Inconsistent driver", speed: "9, 3", defense: "8, 4", offense: "7, 2" },
 	],
 };
 function normalizeExamples(saved) {
@@ -213,7 +206,7 @@ function facetSettingsHtml(facet, state) {
 function overallSettingsHtml(draft) {
 	const o = draft.overall;
 	const total = FACET_ORDER.reduce((t, k) => t + (Number(o.weights[k]) || 0), 0);
-	return `<div class="panel-heading"><div><h3>Overall ranking (General statistics)</h3><p>How the four facet scores become each driver's overall score on the leaderboard.</p></div></div><div class="sc-body">
+	return `<div class="panel-heading"><div><h3>Overall ranking (General statistics)</h3><p>How the facet scores become each driver's overall score on the leaderboard.</p></div></div><div class="sc-body">
   <fieldset class="sc-methods"><legend>Ranking method</legend>${Object.entries(OVERALL_METHODS)
 		.map(
 			([k, m]) =>
@@ -223,7 +216,7 @@ function overallSettingsHtml(draft) {
   <label class="b-field"><span>Which attempt counts in each facet</span><select data-sc="overall.attempt">${Object.entries(ATTEMPT_RULES)
 		.map(([k, r]) => `<option value="${k}" ${o.attempt === k ? "selected" : ""}>${esc(r.label)}</option>`)
 		.join("")}</select><small class="help">The original rule uses each driver's most recent attempt, so improvement shows straight away.</small></label>
-  <div class="sc-comp"><div class="sc-comp-head"><strong>Facet weights</strong></div><p class="help" style="margin:0 0 10px">How much each facet counts in the facet average${o.method === "missingZero" ? " (here: in the weighted sum)" : ""}. 25% each treats all facets equally.</p>${FACET_ORDER.map(
+  <div class="sc-comp"><div class="sc-comp-head"><strong>Facet weights</strong></div><p class="help" style="margin:0 0 10px">How much each facet counts in the facet average${o.method === "missingZero" ? " (here: in the weighted sum)" : ""}. An equal share each (33.34 / 33.33 / 33.33) treats all facets equally.</p>${FACET_ORDER.map(
 		(k) => `<div class="sc-facet-weight"><span>${esc(FACET_NAMES[k])}</span>${weightControl(`overall.weights.${k}`, o.weights[k], FACET_NAMES[k])}</div>`,
 	).join("")}</div>
   <div class="sc-total-row" id="sc-total">${totalHtml(total)}<button type="button" class="button button-secondary button-small" data-sc-balance="overall.weights">Make weights add up to 100%</button><button type="button" class="button button-secondary button-small" data-sc-default="overall">Use original overall settings</button></div>
@@ -299,7 +292,7 @@ function refreshExampleResults(state) {
 		rows.forEach((_, i) => {
 			const b = before[i],
 				a = after[i];
-			put(`${i}-facets`, `${b.completed}/4`);
+			put(`${i}-facets`, `${b.completed}/${FACET_ORDER.length}`);
 			put(`${i}-before`, b.completed ? two(b.overall) : "--");
 			put(`${i}-brank`, b.completed ? `#${rb[i]}` : "--");
 			put(`${i}-after`, a && a.completed ? `<strong>${two(a.overall)}</strong>` : "--");
@@ -350,7 +343,7 @@ function impactHtml(state) {
 	return `<p class="sc-impact">${names.length} recorded driver${names.length === 1 ? "" : "s"}; ${moved} would change rank.</p><div class="table-wrap sc-table" style="max-height:360px"><table><thead><tr><th>Driver</th><th>Facets</th><th>Current overall</th><th>Current rank</th><th>New overall</th><th>New rank</th><th>Change</th></tr></thead><tbody>${names
 		.map(
 			(n) =>
-				`<tr><td><strong>${esc(n)}</strong></td><td>${a[n].completed}/4</td><td>${two(b[n].overall)}</td><td>#${b[n].rank}</td><td><strong>${two(a[n].overall)}</strong></td><td>${rankCell(b[n].rank, a[n].rank)}</td><td>${changeCell(b[n].overall, a[n].overall)}</td></tr>`,
+				`<tr><td><strong>${esc(n)}</strong></td><td>${a[n].completed}/${FACET_ORDER.length}</td><td>${two(b[n].overall)}</td><td>#${b[n].rank}</td><td><strong>${two(a[n].overall)}</strong></td><td>${rankCell(b[n].rank, a[n].rank)}</td><td>${changeCell(b[n].overall, a[n].overall)}</td></tr>`,
 		)
 		.join("")}</tbody></table></div>`;
 }
@@ -442,10 +435,10 @@ export function bindScoringEditor(ctx) {
 				const read = (k) => Number(flat ? group[k] : group[k].weight) || 0;
 				const write = (k, value) => (flat ? (group[k] = value) : (group[k].weight = value));
 				const total = keys.reduce((t, k) => t + read(k), 0);
-				const values = keys.map((k) => Math.round((total > 0 ? (read(k) * 100) / total : 100 / keys.length) * 10) / 10);
+				const values = keys.map((k) => Math.round((total > 0 ? (read(k) * 100) / total : 100 / keys.length) * 100) / 100); // 2 decimals: 33.33 / 33.33 / 33.34
 				// Rounding can leave the total at 99.9 or 100.1; the largest weight absorbs the difference.
 				const biggest = values.indexOf(Math.max(...values));
-				values[biggest] = Math.round((values[biggest] + 100 - values.reduce((a, x) => a + x, 0)) * 10) / 10;
+				values[biggest] = Math.round((values[biggest] + 100 - values.reduce((a, x) => a + x, 0)) * 100) / 100;
 				keys.forEach((k, i) => write(k, values[i]));
 				markDirty();
 				redraw();
@@ -531,7 +524,7 @@ export function bindScoringEditor(ctx) {
 	);
 	document.querySelector("#ex-add").onclick = () => {
 		if (state.scoringTab === "overall")
-			examples.overall.push({ label: `Example driver ${examples.overall.length + 1}`, speed: "", defense: "", offense: "", shooting: "" });
+			examples.overall.push({ label: `Example driver ${examples.overall.length + 1}`, speed: "", defense: "", offense: "" });
 		else {
 			const row = { label: `Example ${examples.facets[state.scoringTab].length + 1}` };
 			exampleFields(state.scoringTab).forEach((f) => (row[f.key] = 0));

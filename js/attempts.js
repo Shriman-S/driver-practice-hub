@@ -14,7 +14,7 @@
 import { FACETS, GRADES, OBSERVATIONS, ROBOTS, FACET_COURSE_GROUP } from "./constants.js";
 import { fieldHtml, courseOptions } from "./fields.js";
 import { courseLabel, COURSE_GROUPS, publishedCourses } from "./courses.js";
-import { scoreSubmission } from "./scoring.js";
+import { scoreSubmission, FACET_ORDER } from "./scoring.js";
 import { esc, now, dateText } from "./util.js";
 import {
 	normalizeForm,
@@ -25,9 +25,11 @@ import {
 	customFormHtml,
 	collectAnswers,
 	metricOf,
+	answerText,
 } from "./customforms.js";
+import { drillForm, drillFormHtml, drillLabel, addedQuestions, addedPart, observationChoices } from "./drillforms.js";
 
-const FACET_KEYS = ["speed", "defense", "offense", "shooting"];
+const FACET_KEYS = FACET_ORDER; // the scored drills (Shooting only was removed in Update 47)
 const score2 = (n) => Number(n).toFixed(2);
 const newestFirst = (a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || ""));
 const when = (iso) => (iso ? new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(iso)) : "");
@@ -49,8 +51,12 @@ const partnerOf = (x) =>
 			: "";
 // Every scored or recorded answer as "Question: answer" pairs (the Responses column of the enlarged view).
 function responses(state, x) {
-	if (FACETS[x.facet])
-		return FACETS[x.facet].fields.map((f) => [f[6] || f[1], x.data?.[f[0]] ?? ""]).filter(([, v]) => v !== "");
+	if (FACETS[x.facet]) {
+		const def = drillForm(state, x.facet);
+		const scored = FACETS[x.facet].fields.map((f) => [drillLabel(def, f[0]), x.data?.[f[0]] ?? ""]);
+		const added = addedQuestions(def).map((q) => [q.label, answerText(q, x.data?.answers?.[q.id])]);
+		return [...scored, ...added].filter(([, v]) => v !== "" && v !== "--" && v !== null);
+	}
 	const form = customFormOf(state, x);
 	if (!form) return [];
 	return allQuestions(form)
@@ -85,7 +91,9 @@ function filterGroups(state, scope, list) {
 		label: "Course",
 		options: [...[...keys].sort((a, b) => families.indexOf(a.split("-")[0]) - families.indexOf(b.split("-")[0]) || a.localeCompare(b)).map((k) => [k, scope === "general" ? `${familyName(k)}: ${courseLabel(courses, k)}` : courseLabel(courses, k)]), ["", "Not recorded"]],
 	});
-	groups.push({ key: "observation", label: "Coach observations", options: OBSERVATIONS.map((o) => [o, o]) });
+	const seen = new Set([...OBSERVATIONS, ...FACET_KEYS.flatMap((k) => observationChoices(drillForm(state, k)))]);
+	list.forEach((x) => (x.data?.observations || []).forEach((o) => seen.add(o)));
+	groups.push({ key: "observation", label: "Coach observations", options: [...seen].map((o) => [o, o]) });
 	groups.push({
 		key: "status",
 		label: "Record status",
@@ -139,40 +147,112 @@ export function applyFilter(state, scope, list) {
 }
 const activeCount = (f) => ["facet", "grade", "observation", "robot", "course", "status"].reduce((n, k) => n + f[k].length, 0);
 
+// ---------------------------------------------------------------- sorting
+// Clicking a column heading sorts by that column; clicking it again reverses the order. Dates (and Recorded) start with the earliest,
+// scores and other numbers with the highest, and words (drill, course, robot) from A to Z; grades go 9th -> 12th. Attempts without a
+// value always go last. Columns that cannot be ordered sensibly (Driver, responses, observations, notes, Actions) are not sortable.
+// The sort is kept per list in state.attemptSort[scope] (null = the default: most recently recorded first) and is shared with the
+// enlarged view; "Reset sorting" (shown only while sorted) returns to the default.
+export function sortOf(state, scope) {
+	state.attemptSort ??= {};
+	return state.attemptSort[scope] || null;
+}
+function sorters(state, facet) {
+	const courses = state.data.courses || {};
+	const def = facet ? drillForm(state, facet) : null;
+	const list = {
+		date: { label: "Date", first: "asc", get: (x) => x.date || null },
+		drill: { label: "Drill", first: "asc", get: (x) => attemptLabelOf(state, x) },
+		grade: { label: "Grade", first: "asc", get: (x) => (GRADES.includes(x.grade) ? GRADES.indexOf(x.grade) : null) },
+		course: { label: "Course", first: "asc", get: (x) => (courseOf(x) ? courseLabel(courses, courseOf(x)) : null) },
+		robot: { label: "Robot", first: "asc", get: (x) => robotOf(x) || null },
+		final: { label: "Final score", first: "desc", get: (x) => Number(x.score?.final ?? 0) },
+		recorded: { label: "Recorded", first: "asc", get: (x) => x.createdAt || null },
+	};
+	if (facet) {
+		for (const f of FACETS[facet].fields.filter((f) => f[2] === "number"))
+			list[`f:${f[0]}`] = { label: drillLabel(def, f[0]), first: "desc", get: (x) => (x.data?.[f[0]] === "" || x.data?.[f[0]] === undefined ? null : Number(x.data[f[0]])) };
+		for (const q of addedQuestions(def).filter((q) => q.type === "number" || q.type === "scale"))
+			list[`q:${q.id}`] = { label: q.label, first: "desc", get: (x) => (typeof x.data?.answers?.[q.id] === "number" ? x.data.answers[q.id] : null) };
+	}
+	return list;
+}
+function sortList(state, scope, list) {
+	const sort = sortOf(state, scope);
+	const by = sort && sorters(state, scope === "general" ? null : scope)[sort.key];
+	if (!by) return [...list].sort(newestFirst); // the default order
+	const dir = sort.dir === "desc" ? -1 : 1;
+	const empty = (v) => v === null || v === undefined || v === "" || Number.isNaN(v);
+	return [...list].sort((a, b) => {
+		const va = by.get(a),
+			vb = by.get(b);
+		if (empty(va) || empty(vb)) return empty(va) === empty(vb) ? newestFirst(a, b) : empty(va) ? 1 : -1; // no value: always last
+		const c = typeof va === "number" && typeof vb === "number" ? va - vb : String(va).localeCompare(String(vb), undefined, { numeric: true });
+		return c ? c * dir : newestFirst(a, b);
+	});
+}
+const sortDescription = (state, scope) => {
+	const sort = sortOf(state, scope);
+	const by = sort && sorters(state, scope === "general" ? null : scope)[sort.key];
+	if (!by) return "";
+	const words = { date: ["earliest first", "latest first"], recorded: ["earliest first", "latest first"], grade: ["9th to 12th", "12th to 9th"] }[sort.key];
+	const isNumber = sort.key === "final" || sort.key.startsWith("f:") || sort.key.startsWith("q:");
+	const [up, down] = words || (isNumber ? ["lowest first", "highest first"] : ["A to Z", "Z to A"]);
+	return `Sorted by ${by.label}, ${sort.dir === "asc" ? up : down}`;
+};
+function sortResetHtml(state, scope) {
+	const text = sortDescription(state, scope);
+	return `<span class="sort-status" data-sort-status ${text ? "" : "hidden"}><span data-sort-text>${esc(text)}</span><button type="button" class="button button-secondary button-small" data-sort-reset title="Back to the default order: most recently recorded first">Reset sorting</button></span>`;
+}
+
 // ---------------------------------------------------------------- table
 function tableHtml(state, scope, list, expanded) {
 	const courses = state.data.courses || {};
 	const facet = scope === "general" ? null : scope;
+	const def = facet ? drillForm(state, facet) : null;
 	const numeric = facet ? FACETS[facet].fields.filter((f) => f[2] === "number") : [];
+	const added = facet ? addedQuestions(def) : [];
 	const paired = facet === "defense" || facet === "offense";
+	const keys = sorters(state, facet);
+	// Each column: [heading, cell, sort key (or null when the column cannot be sorted)]
 	const cols = [
-		["Date", (x) => `<td class="nowrap">${dateText(x.date)}${x.editedAt ? ' <span class="edited-pill" title="Edited ' + esc(when(x.editedAt)) + '">Edited</span>' : ""}</td>`],
-		...(facet ? [] : [["Drill", (x) => `<td>${esc(attemptLabelOf(state, x))}</td>`]]),
-		["Driver", (x) => `<td><strong>${esc(x.driverName)}</strong></td>`],
-		["Grade", (x) => `<td>${esc(x.grade)}</td>`],
-		["Course", (x) => (courseOf(x) ? `<td>${esc(courseLabel(courses, courseOf(x)))}</td>` : '<td class="missing">Not recorded</td>')],
-		["Robot", (x) => (robotOf(x) ? `<td class="nowrap">${esc(robotOf(x))}</td>` : '<td class="missing">Not recorded</td>')],
-		...(expanded && paired ? [[facet === "defense" ? "Driver 1 (opponent)" : "Driver 2 (defender)", (x) => `<td>${esc(partnerOf(x) || "--")}</td>`]] : []),
-		...(expanded && facet === "speed" ? [["Timer / observer", (x) => `<td>${esc(x.data?.timerName || "--")}</td>`]] : []),
-		...numeric.map((f) => [f[6] || f[1], (x) => `<td>${esc(x.data?.[f[0]] ?? "--")}</td>`]),
+		["Date", (x) => `<td class="nowrap">${dateText(x.date)}${x.editedAt ? ' <span class="edited-pill" title="Edited ' + esc(when(x.editedAt)) + '">Edited</span>' : ""}</td>`, "date"],
+		...(facet ? [] : [["Drill", (x) => `<td>${esc(attemptLabelOf(state, x))}</td>`, "drill"]]),
+		["Driver", (x) => `<td><strong>${esc(x.driverName)}</strong></td>`, null],
+		["Grade", (x) => `<td>${esc(x.grade)}</td>`, "grade"],
+		["Course", (x) => (courseOf(x) ? `<td>${esc(courseLabel(courses, courseOf(x)))}</td>` : '<td class="missing">Not recorded</td>'), "course"],
+		["Robot", (x) => (robotOf(x) ? `<td class="nowrap">${esc(robotOf(x))}</td>` : '<td class="missing">Not recorded</td>'), "robot"],
+		...(expanded && paired ? [[facet === "defense" ? "Driver 1 (opponent)" : "Driver 2 (defender)", (x) => `<td>${esc(partnerOf(x) || "--")}</td>`, null]] : []),
+		...(expanded && facet === "speed" ? [["Timer / observer", (x) => `<td>${esc(x.data?.timerName || "--")}</td>`, null]] : []),
+		...numeric.map((f) => [drillLabel(def, f[0]), (x) => `<td>${esc(x.data?.[f[0]] ?? "--")}</td>`, `f:${f[0]}`]),
+		...added.map((q) => [q.label, (x) => `<td>${esc(answerText(q, x.data?.answers?.[q.id]))}</td>`, keys[`q:${q.id}`] ? `q:${q.id}` : null]),
 		...(expanded && !facet
-			? [["Responses", (x) => `<td class="resp-cell">${responses(state, x).map(([q, v]) => `<span><b>${esc(q)}:</b> ${esc(v)}</span>`).join("") || "--"}</td>`]]
+			? [["Responses", (x) => `<td class="resp-cell">${responses(state, x).map(([q, v]) => `<span><b>${esc(q)}:</b> ${esc(v)}</span>`).join("") || "--"}</td>`, null]]
 			: []),
-		["Final score", (x) => `<td><strong>${score2(x.score?.final ?? 0)}</strong></td>`],
-		["Observations", (x) => `<td>${esc(x.data?.observations?.join(", ") || "--")}</td>`],
-		...(facet || expanded ? [["Notes", (x) => `<td class="note-cell${expanded ? " wide" : ""}" title="${esc(x.data?.notes || "")}">${esc(x.data?.notes || "--")}</td>`]] : []),
-		...(expanded ? [["Recorded", (x) => `<td class="nowrap">${esc(when(x.createdAt))}</td>`]] : []),
+		["Final score", (x) => `<td><strong>${score2(x.score?.final ?? 0)}</strong></td>`, "final"],
+		["Observations", (x) => `<td>${esc(x.data?.observations?.join(", ") || "--")}</td>`, null],
+		...(facet || expanded ? [["Notes", (x) => `<td class="note-cell${expanded ? " wide" : ""}" title="${esc(x.data?.notes || "")}">${esc(x.data?.notes || "--")}</td>`, null]] : []),
+		...(expanded ? [["Recorded", (x) => `<td class="nowrap">${esc(when(x.createdAt))}</td>`, "recorded"]] : []),
 		[
 			'<span class="no-print">Actions</span>',
 			(x) =>
 				`<td class="no-print nowrap"><button class="button button-secondary button-small" data-edit-attempt="${esc(x.id)}">Edit</button> <button class="button button-danger button-small" data-delete-attempt="${esc(x.id)}">Delete</button></td>`,
+			null,
 		],
 	];
-	const rows = [...list]
-		.sort(newestFirst)
+	const sort = sortOf(state, scope);
+	const head = ([h, , key]) => {
+		const label = h.startsWith("<") ? h : esc(h);
+		if (!key) return `<th>${label}</th>`;
+		const active = sort?.key === key;
+		const aria = active ? (sort.dir === "asc" ? "ascending" : "descending") : "none";
+		const arrow = active ? (sort.dir === "asc" ? "▲" : "▼") : "↕";
+		return `<th aria-sort="${aria}"><button type="button" class="th-sort${active ? " active" : ""}" data-sort="${esc(key)}" title="Sort by ${esc(h)}">${label}<span class="sort-arrow" aria-hidden="true">${arrow}</span></button></th>`;
+	};
+	const rows = sortList(state, scope, list)
 		.map((x) => `<tr>${cols.map(([, cell]) => cell(x)).join("")}</tr>`)
 		.join("");
-	return `<div class="table-wrap${expanded ? " sheet-table" : ""}"><table><thead><tr>${cols.map(([h]) => `<th>${h.startsWith("<") ? h : esc(h)}</th>`).join("")}</tr></thead><tbody>${rows || `<tr><td colspan="${cols.length}" class="empty">No attempts match.</td></tr>`}</tbody></table></div>`;
+	return `<div class="table-wrap${expanded ? " sheet-table" : ""}"><table><thead><tr>${cols.map(head).join("")}</tr></thead><tbody>${rows || `<tr><td colspan="${cols.length}" class="empty">No attempts match.</td></tr>`}</tbody></table></div>`;
 }
 
 function chipsHtml(state, scope, groups) {
@@ -206,7 +286,7 @@ export function attemptsSectionHtml(state, { scope, list, title, note, expanded 
 	const missing = list.filter(missingInfo).length;
 	return `<section class="panel attempts-section${expanded ? " expanded" : ""}" data-attempts-scope="${esc(scope)}" ${expanded ? "data-expanded" : ""}>
   <div class="panel-heading"><div><h3>${esc(title)}</h3><p>${esc(note)}</p></div>${expanded ? "" : `<button type="button" class="button button-secondary button-small enlarge-btn" data-enlarge="${esc(scope)}" title="Show this list larger, with every detail"><span aria-hidden="true">⤢</span> Enlarge</button>`}</div>
-  <div class="attempts-tools no-print"><label class="attempts-search"><span class="sr-only">Search attempts</span><input type="search" data-attempt-search value="${esc(f.q)}" placeholder="Search driver, course, robot, notes, date…" autocomplete="off"></label>${filterMenuHtml(state, scope, groups)}<span class="attempts-count" data-attempts-count>${shown.length === list.length ? `${list.length} attempt${list.length === 1 ? "" : "s"}` : `Showing ${shown.length} of ${list.length}`}</span></div>
+  <div class="attempts-tools no-print"><label class="attempts-search"><span class="sr-only">Search attempts</span><input type="search" data-attempt-search value="${esc(f.q)}" placeholder="Search driver, course, robot, notes, date…" autocomplete="off"></label>${filterMenuHtml(state, scope, groups)}${sortResetHtml(state, scope)}<span class="attempts-count" data-attempts-count>${shown.length === list.length ? `${list.length} attempt${list.length === 1 ? "" : "s"}` : `Showing ${shown.length} of ${list.length}`}</span></div>
   <div class="filter-chips no-print" data-attempts-chips>${chipsHtml(state, scope, groups)}</div>
   ${missing ? `<p class="help attempts-missing no-print">${missing} attempt${missing === 1 ? " has" : "s have"} no course or robot recorded. Use <strong>Edit</strong> to add them, or filter by <em>Record status → Missing course or robot</em>.</p>` : ""}
   <div data-attempts-body>${tableHtml(state, scope, shown, expanded)}</div>
@@ -242,6 +322,10 @@ export function bindAttemptsSections(root, api) {
 			section.querySelector("[data-attempts-chips]").innerHTML = chipsHtml(api.state, scope, groups);
 			section.querySelector(".filter-menu summary").textContent = `Filters${activeCount(f) ? ` (${activeCount(f)})` : ""}`;
 			section.querySelectorAll("[data-filter]").forEach((box) => (box.checked = f[box.dataset.filter].includes(box.value)));
+			const status = section.querySelector("[data-sort-status]");
+			const text = sortDescription(api.state, scope);
+			status.hidden = !text; // the Reset sorting button is shown only while the list is not in its default order
+			status.querySelector("[data-sort-text]").textContent = text;
 		};
 		section.querySelector("[data-attempt-search]").oninput = (e) => {
 			f.q = e.target.value;
@@ -265,6 +349,20 @@ export function bindAttemptsSections(root, api) {
 			if (e.target.closest("[data-clear-filters]")) {
 				for (const k of ["facet", "grade", "observation", "robot", "course", "status"]) f[k] = [];
 				return redrawTable();
+			}
+			const sortBtn = e.target.closest("[data-sort]");
+			if (sortBtn) {
+				const key = sortBtn.dataset.sort;
+				const now = sortOf(api.state, scope);
+				const first = sorters(api.state, scope === "general" ? null : scope)[key]?.first || "asc";
+				api.state.attemptSort[scope] = now?.key === key ? { key, dir: now.dir === "asc" ? "desc" : "asc" } : { key, dir: first };
+				redrawTable();
+				return section.querySelector(`[data-sort="${CSS.escape(key)}"]`)?.focus();
+			}
+			if (e.target.closest("[data-sort-reset]")) {
+				api.state.attemptSort[scope] = null;
+				redrawTable();
+				return section.querySelector("[data-attempt-search]")?.focus();
 			}
 			const edit = e.target.closest("[data-edit-attempt]");
 			if (edit) return openEditAttempt(api, edit.dataset.editAttempt);
@@ -339,16 +437,9 @@ export function refreshSheet() {
 // ---------------------------------------------------------------- Edit attempt pop-up
 // The answers an attempt can be edited for, as they appear in the form (values come from `snap`: { driverName, grade, date, data }).
 function builtInFormHtml(api, facet, snap) {
-	const f = FACETS[facet];
-	const courses = api.state.data.courses || {};
-	const value = (name) => (name === "driverName" ? snap.driverName : name === "grade" ? snap.grade : name === "practiceDate" ? snap.date : snap.data?.[name]);
-	const opts = (def) => ({ facet, courses, value: value(def[0]), edit: true, idPrefix: "edit-" });
-	const obs = snap.data?.observations || [];
-	return `<form id="edit-attempt-form" class="form-panel edit-form" novalidate>
-  <div class="form-section"><h3>Driver information</h3><div class="field-grid">${f.driverFields.map((d) => fieldHtml(d, opts(d))).join("")}</div></div>
-  <div class="form-section"><h3>Driver performance</h3><div class="field-grid">${f.fields.map((d) => fieldHtml(d, opts(d))).join("")}</div></div>
-  <div class="form-section"><h3>Coach observations</h3><div class="checkboxes">${OBSERVATIONS.map((o) => `<label><input type="checkbox" name="observation" value="${esc(o)}" ${obs.includes(o) ? "checked" : ""}> ${esc(o)}</label>`).join("")}</div><div class="field full" style="margin-top:14px"><label for="edit-notes">Notable driving / coaching note</label><textarea id="edit-notes" name="notes" maxlength="600">${esc(snap.data?.notes || "")}</textarea></div></div>
-</form>`;
+	// The drill's CURRENT form (including questions an administrator added or reworded), filled in with this attempt's answers.
+	const values = { ...(snap.data || {}), driverName: snap.driverName, grade: snap.grade, practiceDate: snap.date };
+	return drillFormHtml(drillForm(api.state, facet), facet, { edit: true, values, courses: api.state.data.courses || {} });
 }
 // Puts saved answers back into a custom form's controls (text, numbers, dropdowns, radio buttons, rating scales, checkboxes).
 function fillCustom(formEl, form, answers = {}) {
@@ -389,7 +480,11 @@ function comparable(value) {
 function readEdit(api, x, formEl) {
 	const form = customFormOf(api.state, x);
 	if (FACETS[x.facet]) {
+		const def = drillForm(api.state, x.facet);
 		const d = { ...(x.data || {}), ...Object.fromEntries(new FormData(formEl)) };
+		const added = addedQuestions(def);
+		added.forEach((q) => delete d[q.id]); // added questions are saved under data.answers, not as top-level keys
+		if (added.length || x.data?.answers) d.answers = { ...(x.data?.answers || {}), ...collectAnswers(addedPart(def), formEl) };
 		d.observations = [...formEl.querySelectorAll('[name="observation"]:checked')].map((b) => b.value);
 		if (!d.observations.length) delete d.observation; // FormData only adds `observation` when a box is ticked (as on the Practice form)
 		const item = { ...x, driverName: String(d.driverName || "").trim(), grade: d.grade || "", date: d.practiceDate || "", data: d };
@@ -434,6 +529,7 @@ export function openEditAttempt(api, id) {
 	const formEl = () => body.querySelector("form");
 	const prepare = (snap) => {
 		if (!FACETS[x.facet]) fillCustom(formEl(), form, snap.data?.answers);
+		else fillCustom(formEl(), addedPart(drillForm(state, x.facet)), snap.data?.answers || {}); // questions an administrator added
 		updateScore();
 	};
 	// Live score with the answers on screen, next to the saved score.

@@ -5,6 +5,7 @@ import {
 	normalizeScoring,
 	OVERALL_METHODS,
 	ATTEMPT_RULES,
+	FACET_ORDER,
 } from "./scoring.js";
 import * as store from "./storage.js";
 import {
@@ -35,7 +36,10 @@ import {
 	formFacet,
 	customAnalysisHtml,
 	customReport,
+	checkRequiredGroups,
+	collectAnswers,
 } from "./customforms.js";
+import { drillForm, drillFormHtml, isDrillForm, addedPart, addedQuestions } from "./drillforms.js";
 import { downloadReport } from "./pdf.js";
 import { fieldHtml } from "./fields.js";
 import { courseLabel } from "./courses.js";
@@ -163,16 +167,20 @@ function pageHeader(title, copy, action = "") {
 }
 // Custom forms are offered once they have at least one question.
 const publishedForms = () =>
-	state.data.customForms.map(normalizeForm).filter(isPublished);
+	state.data.customForms.filter((f) => !isDrillForm(f)).map(normalizeForm).filter(isPublished); // drill forms are not custom forms
 const currentCustomForm = () =>
 	isCustomFacet(state.facet)
 		? publishedForms().find((f) => formFacet(f.id) === state.facet) || null
 		: null;
 function renderPractice() {
-	if (isCustomFacet(state.facet) && !currentCustomForm()) state.facet = "speed";
+	if ((isCustomFacet(state.facet) && !currentCustomForm()) || (!isCustomFacet(state.facet) && !FACETS[state.facet])) state.facet = "speed";
 	const custom = currentCustomForm();
 	const f = FACETS[custom ? "speed" : state.facet];
-	return `${pageHeader("Record a practice", "Choose the drill, then record one driver's measured performance. A browser remembers only the name typed on this device.")}<div class="facet-grid">${Object.entries(
+	// Administrators see an Edit form button above every form (built-in drills and custom forms alike).
+	const adminBar = state.session.isAdmin
+		? `<div class="form-admin-bar"><span>Administrator: change this form's description, questions, and sections in the Form builder.</span><button type="button" class="button button-secondary button-small" id="edit-this-form">Edit form</button></div>`
+		: "";
+	return `${pageHeader("Record a practice", "Choose the drill, then record one driver's measured performance.")}<div class="facet-grid">${Object.entries(
 		FACETS,
 	)
 		.map(
@@ -186,7 +194,7 @@ function renderPractice() {
 		)
 		.join(
 			"",
-		)}</div>${custom ? customFormHtml(custom, { courses: state.data.courses }) : `<form id="practice-form" class="panel form-panel"><div class="form-header"><h3>${f.label}</h3><div class="form-intro">${blocksHtml(f.intro)}</div></div><div class="form-section"><h3>Driver information</h3><p>Who is driving, and when the practice took place.</p><div class="field-grid">${f.driverFields.map((x) => fieldHtml(x, { facet: state.facet, courses: state.data.courses })).join("")}</div></div><div class="form-section"><h3>Driver performance</h3><p>Start the timer below, then answer each question about the driver's performance.</p>${f.timer ? timerHtml(f.timer) : ""}<div class="field-grid">${f.fields.map((x) => fieldHtml(x, { facet: state.facet, courses: state.data.courses })).join("")}</div></div><div class="form-section"><h3>Coach observations</h3><p>These notes support coaching and are deliberately excluded from the numerical score.</p><div class="checkboxes">${OBSERVATIONS.map((x) => `<label><input type="checkbox" name="observation" value="${x}"> ${x}</label>`).join("")}</div><div class="field full" style="margin-top:14px"><label for="notes">Notable driving / coaching note</label><textarea id="notes" name="notes" maxlength="600" placeholder="Describe what was notable about the driver's driving."></textarea></div></div><div class="form-actions"><button type="reset" class="button button-secondary">Clear</button><button class="button" type="submit">Submit practice</button></div></form>`}`;
+		)}</div>${custom ? adminBar + customFormHtml(custom, { courses: state.data.courses }) : drillFormHtml(drillForm(state, state.facet), state.facet, { courses: state.data.courses, timer: f.timer ? timerHtml(f.timer) : "", adminBar })}`;
 }
 // Builds the timer panel. Countdown drills get Start/Pause + Reset; the speed stopwatch also gets the Lap Split button.
 function timerHtml(kind) {
@@ -198,10 +206,12 @@ function timerHtml(kind) {
 }
 // ======================================================================= Analysis (administrator only)
 // The Analysis tab has its own view selector, independent of the drill chosen on the Practice form:
-//   "general" -> statistics for all four facets plus the coverage-first driver leaderboard
+//   "general" -> statistics for every facet plus the coverage-first driver leaderboard
 //   a facet   -> attempts, standings, and statistics for that one facet
 // Every view is computed from state.data.submissions, so a deleted attempt disappears from all of them at once.
-const FACET_KEYS = ["speed", "defense", "offense", "shooting"];
+const FACET_SHORT = { speed: "Speed", defense: "Defense", offense: "Offense" };
+const FACET_KEYS = FACET_ORDER; // the scored drills: Speed, Defensive, Offensive (Shooting only was removed in Update 47)
+const ALL_FACETS = `all ${["zero", "one", "two", "three", "four"][FACET_KEYS.length] || FACET_KEYS.length}`; // "all three"
 const mean = (list) =>
 	list.length ? list.reduce((a, b) => a + b, 0) / list.length : 0;
 const score2 = (n) => Number(n).toFixed(2);
@@ -267,12 +277,12 @@ const attemptsApi = {
 	render: () => render(),
 	applyScoring: () => applyScoring(),
 	openDeleteAttempt: (id) => openDeleteAttempt(id),
-	// Every attempt a panel can show: "general" = All recorded attempts (the four built-in drills), otherwise one drill.
+	// Every attempt a panel can show: "general" = All recorded attempts (the built-in drills), otherwise one drill.
 	listFor: (scope) =>
 		scope === "general" ? builtInSubmissions() : state.data.submissions.filter((x) => x.facet === scope),
 };
 
-// Built-in drills only. Attempts on custom forms have their own analysis and must never count toward the four-facet leaderboard.
+// Built-in drills only. Attempts on custom forms have their own analysis and must never count toward the facet leaderboard.
 const builtInSubmissions = () =>
 	state.data.submissions.filter((x) => FACET_KEYS.includes(x.facet));
 const attemptLabel = (x) => attemptLabelOf(state, x);
@@ -288,7 +298,7 @@ function renderAnalysis() {
 	const options = `<option value="general" ${view === "general" ? "selected" : ""}>General statistics (all facets)</option>${FACET_KEYS.map((k) => `<option value="${k}" ${view === k ? "selected" : ""}>${FACETS[k].label}</option>`).join("")}${forms.length ? `<optgroup label="Custom forms">${forms.map((f) => `<option value="${esc(formFacet(f.id))}" ${view === formFacet(f.id) ? "selected" : ""}>${esc(f.title)}</option>`).join("")}</optgroup>` : ""}`;
 	const picker = `<div class="hero-actions"><label class="view-picker"><span>View</span><select id="analysis-view">${options}</select></label><button class="button" id="export-pdf">Download PDF</button></div>`;
 	if (view === "general")
-		return `${pageHeader("Analysis", `General statistics across all four facets. Ranking method: ${esc(OVERALL_METHODS[state.scoring.overall.method].label)}. ${esc(OVERALL_METHODS[state.scoring.overall.method].help)}`, picker)}${analysisGeneral(builtInSubmissions())}`;
+		return `${pageHeader("Analysis", `General statistics across ${ALL_FACETS} facets. Ranking method: ${esc(OVERALL_METHODS[state.scoring.overall.method].label)}. ${esc(OVERALL_METHODS[state.scoring.overall.method].help)}`, picker)}${analysisGeneral(builtInSubmissions())}`;
 	if (isCustomFacet(view)) {
 		const form = forms.find((f) => formFacet(f.id) === view);
 		return `${pageHeader("Analysis", `${esc(form.title)}: standings, question summaries, and every recorded attempt. Choose General statistics for the overall leaderboard.`, picker)}${customAnalysisHtml(form, state.data.submissions, state.data.courses)}`;
@@ -303,16 +313,16 @@ function leaderboardTable(rows, expanded = false) {
 		r.facets[k] === undefined
 			? "<td>--</td>"
 			: `<td>${r.facets[k].toFixed(2)}${expanded ? ` <small class="lb-sub">${r.perFacet[k]} attempt${r.perFacet[k] === 1 ? "" : "s"}</small>` : ""}</td>`;
-	const cols = expanded ? 12 : 10;
+	const cols = FACET_KEYS.length + (expanded ? 8 : 6);
 	const body = rows.length
 		? rows
 				.map(
 					(r, i) =>
-						`<tr><td class="rank">#${i + 1}</td><td><strong>${esc(r.name)}</strong></td><td>${esc(r.grade)}</td><td>${r.completed}/4</td><td>${r.attempts}</td>${FACET_KEYS.map((k) => facetCell(r, k)).join("")}${expanded ? `<td>${r.completed ? r.average.toFixed(2) : "--"}</td><td class="nowrap">${r.lastDate ? dateText(r.lastDate) : "--"}</td>` : ""}<td><div>${r.overall.toFixed(2)}</div><div class="bar"><i style="width:${r.overall * 10}%"></i></div></td></tr>`,
+						`<tr><td class="rank">#${i + 1}</td><td><strong>${esc(r.name)}</strong></td><td>${esc(r.grade)}</td><td>${r.completed}/${FACET_KEYS.length}</td><td>${r.attempts}</td>${FACET_KEYS.map((k) => facetCell(r, k)).join("")}${expanded ? `<td>${r.completed ? r.average.toFixed(2) : "--"}</td><td class="nowrap">${r.lastDate ? dateText(r.lastDate) : "--"}</td>` : ""}<td><div>${r.overall.toFixed(2)}</div><div class="bar"><i style="width:${r.overall * 10}%"></i></div></td></tr>`,
 				)
 				.join("")
 		: `<tr><td colspan="${cols}" class="empty">No practice records yet. Submitted records will appear here for administrators.</td></tr>`;
-	return `<div class="table-wrap${expanded ? " sheet-table" : ""}"><table><thead><tr><th>Rank</th><th>Driver</th><th>Grade</th><th>Facets</th><th title="Recorded attempts across all four drills">Attempts</th><th>Speed</th><th>Defense</th><th>Offense</th><th>Shooting</th>${expanded ? '<th title="Average of the completed facet scores">Facet average</th><th>Last practice</th>' : ""}<th>Overall</th></tr></thead><tbody>${body}</tbody></table></div>`;
+	return `<div class="table-wrap${expanded ? " sheet-table" : ""}"><table><thead><tr><th>Rank</th><th>Driver</th><th>Grade</th><th>Facets</th><th title="Recorded attempts across ${ALL_FACETS} drills">Attempts</th>${FACET_KEYS.map((k) => `<th>${FACET_SHORT[k]}</th>`).join("")}${expanded ? '<th title="Average of the completed facet scores">Facet average</th><th>Last practice</th>' : ""}<th>Overall</th></tr></thead><tbody>${body}</tbody></table></div>`;
 }
 function leaderboardSheetHtml() {
 	return `<p class="help sheet-note">Each facet shows the driver's ${esc(ATTEMPT_RULES[state.scoring.overall.attempt].short)} and how many attempts they recorded there. Scores are out of 10. Press Esc or × to return to the page.</p>${leaderboardTable(driverRows(builtInSubmissions()), true)}<p class="legend sheet-note">${esc(overallLegend(state.scoring))}</p>`;
@@ -320,12 +330,12 @@ function leaderboardSheetHtml() {
 
 function analysisGeneral(submissions) {
 	const rows = driverRows(submissions);
-	const full = rows.filter((r) => r.completed === 4).length;
+	const full = rows.filter((r) => r.completed === FACET_KEYS.length).length;
 	const overview = FACET_KEYS.map((k) => {
 		const s = facetStats(k, submissions);
 		return `<tr><td><strong>${FACETS[k].label}</strong></td><td>${s.attempts}</td><td>${s.drivers}</td><td>${s.attempts ? score2(s.average) : "--"}</td><td>${s.best ? `${score2(s.best.score.final)} <small>(${esc(s.best.driverName)})</small>` : "--"}</td></tr>`;
 	}).join("");
-	return `<div class="metrics">${metricTile("Recorded attempts", submissions.length)}${metricTile("Drivers assessed", rows.length)}${metricTile("Top overall score", rows[0] ? rows[0].overall.toFixed(2) : "--", true)}${metricTile("Completed all four facets", full)}</div>
+	return `<div class="metrics">${metricTile("Recorded attempts", submissions.length)}${metricTile("Drivers assessed", rows.length)}${metricTile("Top overall score", rows[0] ? rows[0].overall.toFixed(2) : "--", true)}${metricTile(`Completed ${ALL_FACETS} facets`, full)}</div>
   <section class="panel analysis-panel" style="margin-bottom:18px"><div class="panel-heading"><div><h3>Statistics by facet</h3><p>Every recorded attempt, scores out of 10.</p></div></div><div class="table-wrap"><table><thead><tr><th>Facet</th><th>Attempts</th><th>Drivers</th><th>Average score</th><th>Best score</th></tr></thead><tbody>${overview}</tbody></table></div></section>
   <div class="analysis-layout" style="grid-template-columns:1fr"><section class="panel analysis-panel"><div class="panel-heading"><div><h3>Driver leaderboard</h3><p>Each facet shows the driver's ${esc(ATTEMPT_RULES[state.scoring.overall.attempt].short)}; scores are out of 10. Attempts counts every recorded attempt in the four drills.</p></div><button type="button" class="button button-secondary button-small enlarge-btn no-print" id="enlarge-leaderboard" title="Show the leaderboard larger, with more detail"><span aria-hidden="true">⤢</span> Enlarge</button></div>${leaderboardTable(rows)}<p class="legend">${esc(overallLegend(state.scoring))}</p></section>
   <aside class="panel leaderboard"><h3 style="margin-top:0">Top performers</h3>${
@@ -405,7 +415,7 @@ const slug = (text) =>
 function generalReport() {
 	const subs = builtInSubmissions(),
 		rows = driverRows(subs),
-		full = rows.filter((r) => r.completed === 4).length;
+		full = rows.filter((r) => r.completed === FACET_KEYS.length).length;
 	const facetRows = FACET_KEYS.map((k) => {
 		const s = facetStats(k, subs);
 		return [
@@ -419,7 +429,7 @@ function generalReport() {
 	return {
 		fileName: `DriveLab-general-statistics-${todayKey()}.pdf`,
 		title: "General statistics",
-		subtitle: "All four driving facets | scores are out of 10",
+		subtitle: `${FACET_KEYS.map((k) => FACETS[k].label).join(", ")} | scores are out of 10`,
 		metrics: [
 			{ label: "Recorded attempts", value: String(subs.length) },
 			{ label: "Drivers assessed", value: String(rows.length) },
@@ -428,7 +438,7 @@ function generalReport() {
 				value: rows[0] ? rows[0].overall.toFixed(2) : "--",
 				accent: true,
 			},
-			{ label: "Completed all four facets", value: String(full) },
+			{ label: `Completed ${ALL_FACETS} facets`, value: String(full) },
 		],
 		blocks: [
 			{
@@ -448,36 +458,22 @@ function generalReport() {
 				title: "Driver leaderboard",
 				note: `Each facet shows the driver's ${ATTEMPT_RULES[state.scoring.overall.attempt].short}; scores are out of 10.`,
 				orientation: "landscape",
-				nowrap: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
-				align: [
-					"center",
-					"left",
-					"left",
-					"center",
-					"center",
-					"right",
-					"right",
-					"right",
-					"right",
-					"right",
-				],
+				nowrap: [0, 1, 2, 3, 4, ...FACET_KEYS.map((_, i) => i + 5), FACET_KEYS.length + 5],
+				align: ["center", "left", "left", "center", "center", ...FACET_KEYS.map(() => "right"), "right"],
 				head: [
 					"Rank",
 					"Driver",
 					"Grade",
 					"Facets",
 					"Attempts",
-					"Speed",
-					"Defense",
-					"Offense",
-					"Shooting",
+					...FACET_KEYS.map((k) => FACET_SHORT[k]),
 					"Overall",
 				],
 				body: rows.map((r, i) => [
 					`#${i + 1}`,
 					r.name,
 					r.grade,
-					`${r.completed}/4`,
+					`${r.completed}/${FACET_KEYS.length}`,
 					String(r.attempts),
 					...FACET_KEYS.map((k) =>
 						r.facets[k] === undefined ? "--" : r.facets[k].toFixed(2),
@@ -755,7 +751,7 @@ function renderForms() {
 	return renderFormBuilder(ctx);
 }
 function renderAdmin() {
-	return `${pageHeader("Administrator", "Security, data-source, and operating guidance.")}<div class="admin-grid"><section class="panel admin-card"><h3>Connection</h3><p>${store.isRemote() ? "Firebase is configured. Submitters cannot read records; only accounts listed in the admins collection can open analysis." : "Local preview is active. Data stays only in this browser and is not appropriate for shared team use."}</p>${store.isRemote() ? `<p><strong>Your Google UID:</strong><br><code>${esc(store.getAdminUid())}</code></p><p class="help">Add this UID as the document ID in <code>admins</code> through the Firebase console, then sign in again.</p>` : "<p>Follow the README's Firebase setup steps before publishing. Do not publish with the local-preview data as if it were shared, secure storage.</p>"}</section><section class="panel admin-card"><h3>Privacy controls</h3><p>Full names, grades, notes, and submissions are never embedded in this source repository. The app does not use analytics, advertising, or a shared public name list.</p><p class="help">Name suggestions are local to each browser so a student does not need to retype their own name without exposing other students' names.</p></section><section class="panel admin-card"><h3>Export</h3><p>Use the Analysis screen's Download PDF button. It downloads a formatted, dated PDF report of the view currently selected (general statistics, one drill, or one custom form).</p></section><section class="panel admin-card"><h3>Operational rule</h3><p>Use the same selected course layout for each facet throughout a single day. Pair defense and offense on the shared course and record each driver separately.</p></section></div>`;
+	return `${pageHeader("Administrator", "Security, data-source, and operating guidance.")}<div class="admin-grid"><section class="panel admin-card"><h3>Connection</h3><p>${store.isRemote() ? "Firebase is configured. Submitters cannot read records; only accounts listed in the admins collection can open analysis." : "Local preview is active. Data stays only in this browser and is not appropriate for shared team use."}</p>${store.isRemote() ? `<p><strong>Your Google UID:</strong><br><code>${esc(store.getAdminUid())}</code></p><p class="help">Add this UID as the document ID in <code>admins</code> through the Firebase console, then sign in again.</p>` : "<p>Follow the README's Firebase setup steps before publishing. Do not publish with the local-preview data as if it were shared, secure storage.</p>"}</section><section class="panel admin-card"><h3>Privacy controls</h3><p>Full names, grades, notes, and submissions are never embedded in this source repository. The app does not use analytics, advertising, or a shared public name list.</p><p class="help">Names are typed in on every form; the site does not remember or suggest names.</p></section><section class="panel admin-card"><h3>Export</h3><p>Use the Analysis screen's Download PDF button. It downloads a formatted, dated PDF report of the view currently selected (general statistics, one drill, or one custom form).</p></section><section class="panel admin-card"><h3>Operational rule</h3><p>Use the same selected course layout for each facet throughout a single day. Pair defense and offense on the shared course and record each driver separately.</p></section></div>`;
 }
 function render() {
 	const views = {
@@ -794,13 +790,21 @@ function bindView() {
 		const custom = currentCustomForm();
 		if (custom) bindCustomForm(custom, ctx);
 		else {
-			const cached = localStorage.getItem("drivelab-last-name");
-			if (cached) document.querySelector("#driverName").value = cached;
-			document.querySelector("#practiceDate").value = todayKey();
+			document.querySelector("#practiceDate").value = todayKey(); // names are always typed in; nothing is pre-filled (Update 47)
 			bindTimer();
 			document.querySelector("#practice-form").onsubmit = submitPractice;
 		}
 	}
+	// Edit form (administrators): opens this form in the Form builder, then comes back here.
+	document.querySelector("#edit-this-form")?.addEventListener("click", () => {
+		const custom = currentCustomForm();
+		const saved = custom && state.data.customForms.find((f) => f.id === custom.id);
+		state.formDraft = JSON.parse(JSON.stringify(custom ? normalizeForm(saved) : drillForm(state, state.facet)));
+		state.formErrors = [];
+		state.formDirty = false;
+		state.formReturn = "practice";
+		setRoute("forms");
+	});
 	if (state.route === "analysis") bindAnalysis();
 	if (state.route === "scoring") bindScoringEditor(ctx);
 	if (state.route === "calendar") {
@@ -833,7 +837,7 @@ function bindView() {
 	if (state.route === "forms") bindFormBuilder(ctx);
 }
 // Wires up the on-page timer for the selected facet.
-//  - Countdown drills (defense / offense / shooting): Start-Pause and Reset only.
+//  - Countdown drills (defense / offense): Start-Pause and Reset only.
 //  - Speed stopwatch: Lap Split can be pressed ONCE per run, at the end of lap 1.
 //      Lap Split -> "First lap split"  = stopwatch reading at that moment; the button then disappears.
 //      Stop      -> "Total drive time" = final stopwatch reading, and
@@ -1004,11 +1008,17 @@ function bindTimer() {
 async function submitPractice(e) {
 	e.preventDefault();
 	const form = e.currentTarget;
+	const def = drillForm(state, state.facet);
+	checkRequiredGroups(form); // required tick-box questions an administrator added
 	if (!form.reportValidity()) return;
 	const d = Object.fromEntries(new FormData(form));
 	d.observations = [
 		...form.querySelectorAll('[name="observation"]:checked'),
 	].map((x) => x.value);
+	// Answers to questions an administrator added are saved under data.answers (like a custom form's answers).
+	const added = addedQuestions(def);
+	added.forEach((q) => delete d[q.id]);
+	if (added.length) d.answers = collectAnswers(addedPart(def), form);
 	const item = {
 		id: uid(),
 		facet: state.facet,
@@ -1022,13 +1032,11 @@ async function submitPractice(e) {
 	try {
 		await store.addSubmission(item);
 		state.data.submissions.push(item);
-		localStorage.setItem("drivelab-last-name", item.driverName);
 		toast(
 			`${FACETS[item.facet].label} score: ${item.score.final.toFixed(2)} / 10`,
 		);
 		form.reset();
 		document.querySelector("#practiceDate").value = todayKey();
-		document.querySelector("#driverName").value = item.driverName;
 	} catch (err) {
 		toast(`Could not save: ${err.message}`);
 	}
@@ -1292,6 +1300,7 @@ function bindThemeToggle() {
 	});
 }
 async function init() {
+	localStorage.removeItem("drivelab-last-name"); // the name remembered by versions before Update 47 is no longer used
 	// Bind navigation and the sign-in button FIRST. They need no network, so the page stays usable
 	// (and an administrator can still reach the sign-in dialog) even if Firebase setup fails below.
 	document

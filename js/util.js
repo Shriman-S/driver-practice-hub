@@ -44,6 +44,24 @@ export function blocksHtml(blocks) {
 }
 // Administrators type descriptions as plain text in the form builder. Lines starting with "- " (or a bullet) become bullet points and
 // every other non-empty line becomes a paragraph; this converts that text into a text block.
+// The reverse of textToBlocks(): a text block as editable text (paragraph lines, "- " bullet lines). Nested lists are flattened into
+// bullets, and two lists in a row are separated by a blank line so they stay separate lists.
+export function blocksToText(blocks = []) {
+	const lines = [];
+	let lastWasList = false;
+	const flat = (list) => list.flatMap((item) => (Array.isArray(item) ? flat(item) : [item]));
+	for (const b of blocks || []) {
+		if (Array.isArray(b)) {
+			if (lastWasList) lines.push("");
+			flat(b).forEach((item) => lines.push(`- ${item}`));
+			lastWasList = true;
+		} else {
+			lines.push(String(b));
+			lastWasList = false;
+		}
+	}
+	return lines.join("\n");
+}
 export function textToBlocks(text = "") {
 	const blocks = [];
 	let list = null;

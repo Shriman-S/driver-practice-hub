@@ -16,7 +16,7 @@ import { esc, blocksHtml } from "./util.js";
 
 const ALWAYS_REQUIRED = ["driverName", "practiceDate"];
 
-// The Course dropdown's choices for a course family ("speed", "defense", "shooting") or "all" (custom forms can use any course).
+// The Course dropdown's choices for a course family ("speed", "defense") or "all" (custom forms can use any course).
 export function courseOptions(courses = {}, group = "all") {
 	if (group !== "all") return publishedCourses(courses, group).map((c) => ({ value: c.key, label: `Course ${c.number}: ${c.name}` }));
 	return COURSE_GROUPS.flatMap((g) =>
@@ -55,7 +55,7 @@ export function fieldHtml(def, { facet = "", courseGroup = "", courses = {}, val
 		const shown = v && !choices.some((c) => c.value === v) ? [...choices, { value: v, label: courseLabel(courses, v) }] : choices;
 		control = selectHtml(id, name, shown, choices.length ? "Select course" : "No courses published yet", v, `${described} ${required ? "required" : ""}`);
 	} else
-		control = `<input id="${id}" name="${name}" ${described} type="${type}" ${type === "number" ? "min=0 step=any" : ""} ${type === "text" ? 'maxlength="80"' : ""} value="${esc(v)}" ${required ? "required" : ""}/>`;
+		control = `<input id="${id}" name="${name}" ${described} type="${type}" ${type === "number" ? "min=0 step=any" : ""} ${type === "text" ? 'maxlength="80" autocomplete="off"' : ""} value="${esc(v)}" ${required ? "required" : ""}/>`;
 	const unanswered = edit && v === "";
 	return `<div class="field${unanswered ? " unanswered" : ""}"><label for="${id}">${esc(label)} ${required ? '<span class="required">*</span>' : ""}${unanswered ? ' <span class="no-answer">No answer yet</span>' : ""}</label>${description ? `<div class="q-desc" id="${id}-desc">${blocksHtml(description)}</div>` : ""}${control}${note ? `<span class="help">${esc(note)}</span>` : ""}</div>`;
 }

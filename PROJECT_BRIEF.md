@@ -4,16 +4,16 @@
 
 The goal is to replace a team's Google Form and Google Sheet workflow for FRC driver practice with a web application that is clear enough to use beside a practice field. The user wants each student's driving evidence organized by facet, accurately scored, easy to compare over time, accessible as a public website, and protected from casual exposure of students' full names and grade levels.
 
-The system supports four current REBUILT-season facets: Speed Driving, Defensive Driving, Offensive Driving, and Shooting Only. Defensive and offensive practice is one physical paired session but produces two independent driver records, so a defensive driver's performance never gets mixed into an offensive driver's analysis. The design also leaves room for future drills, layouts, calendar planning, and printable snapshots.
+The system supports three current REBUILT-season facets: Speed Driving, Defensive Driving, and Offensive Driving. (Shooting Only was part of the original design and was removed in Update 47.) Defensive and offensive practice is one physical paired session but produces two independent driver records, so a defensive driver's performance never gets mixed into an offensive driver's analysis. The design also leaves room for future drills, layouts, calendar planning, and printable snapshots.
 
 ## Requirements translated into the implementation
 
-- Build four preconfigured forms matching the supplied questions, including embedded stopwatch/countdown use.
+- Build three preconfigured forms matching the supplied questions, including embedded stopwatch/countdown use (four originally; Shooting Only was removed in Update 47). Administrators can edit them (Update 50).
 - Compute each facet score from the supplied benchmark and weighted scoring explanation.
 - Rank drivers using the supplied coverage-first method so broad development outranks a single isolated result.
 - Keep the public workflow limited to form submission and calendar viewing; require real administrator authorization for data analysis, course building, and form configuration.
-- Provide a drag-and-drop wall-layout editor, with three course families: speed, a shared defensive/offensive course, and shooting.
-- Provide a monthly calendar, a browser-native PDF export path, reusable name entry, comments, clean organization, GitHub-ready files, and no required paid tool.
+- Provide a drag-and-drop wall-layout editor, with course families for speed and a shared defensive/offensive course (a shooting family existed until Update 47).
+- Provide a monthly calendar, a browser-native PDF export path, name entry, comments, clean organization, GitHub-ready files, and no required paid tool.
 
 ## Methodologies and coding techniques
 
@@ -23,11 +23,11 @@ The app is plain HTML, CSS, and JavaScript modules. It has no build process, fra
 
 ### Separation of concerns
 
-`constants.js` stores form definitions. `scoring.js` is a small collection of pure mathematical functions. `storage.js` abstracts persistence. `app.js` handles UI state and event binding. `styles.css` contains visual styling only. This structure prevents form-rendering logic, security logic, and numerical formulas from becoming a single hard-to-audit file.
+`constants.js` stores the original form definitions (`drillforms.js` turns them into editable forms). `scoring.js` is a small collection of pure mathematical functions. `storage.js` abstracts persistence. `app.js` handles UI state and event binding. `styles.css` contains visual styling only. This structure prevents form-rendering logic, security logic, and numerical formulas from becoming a single hard-to-audit file.
 
 ### Auditable scoring
 
-The score calculations cap components to a 0-10 range. Speed uses a linear 15-second excellent and 30-second slow cutoff, lap consistency, and penalty reduction. Defense benchmarks 6 score preventions, 4 fuel preventions, and 30 seconds wasted. Offense and shooting use the supplied 30 shots, 20 scored, 5 evasions (offense), accuracy, and penalty benchmarks. Overall ranking uses the stated coverage-first formula and the latest attempt within every completed facet.
+The score calculations cap components to a 0-10 range. Speed uses a linear 15-second excellent and 30-second slow cutoff, lap consistency, and penalty reduction. Defense benchmarks 6 score preventions, 4 fuel preventions, and 30 seconds wasted. Offense uses the supplied 30 shots, 20 scored, 5 evasions, and accuracy benchmarks. Overall ranking uses the coverage-first formula (with three facets: 10/3 × (K − 1) + 0.3233 × average + 0.01 when all three are complete; see Update 48) and the latest attempt within every completed facet. These defaults can be changed on the Scoring settings page.
 
 ### Privacy and security by design
 
@@ -761,3 +761,153 @@ Its headings stay in view while scrolling. Edit and Delete work there too, and t
 - Checked with 74 attempts at 1462 x 787, 1440 x 900, and 390 x 844. The attempts table now ends 18 px (the layer's padding) above the layer's bottom edge on all three. The leaderboard table fills the layer down to the formula note beneath it.
 
 **Files affected:** `css/styles.css`
+
+### Update 47: Shooting only removed, name autofill removed, and a new coach observation
+
+**Problem with the previous version:**
+
+- The team no longer runs the Shooting only drill, but its form, Analysis section, course family, and scoring settings were still on the site.
+- Every form filled in the driver name with the last name typed in that browser, and the browser's own autofill also offered names. In practice this caused more retyping and wrong names than it saved.
+- Coaches had no way to record sporadic or jittery driving.
+
+**How it was fixed (simple):**
+
+- The **Shooting only** form, its Analysis view and PDF, its column in the Driver leaderboard, its Scoring settings tab, its course family on the Courses page and Course builder, and its option in the Form builder's "Courses listed" setting are gone.
+- Shooting only attempts already saved are **kept in the database** (nothing was deleted) but are no longer shown or counted anywhere. They can be deleted later if the team wants.
+- Driver names are no longer pre-filled on any form (built-in or custom), and the browser's own name suggestions are turned off on the name boxes. The name remembered by older versions is removed from each browser the first time the new version loads.
+- The **Coach observations** tick boxes now include **Sporadic / Jittery Movement** (after Speed, Agility, and Smooth driving). It also appears in the Analysis Filters menu.
+
+**How it was fixed (technical detail):**
+
+- **Shooting only removed:**
+  - `constants.js`: the `shooting` entry of `FACETS` was removed; `FACET_COURSE_GROUP` no longer has it.
+  - `scoring.js`: `FACET_ORDER` is now `["speed", "defense", "offense"]` (exported `FACET_COUNT` = 3); the `shooting` components, defaults, and `byCourse` entry were removed. `COURSE_KEY` accepts only `speed-N` and `defense-N`. `scoreSubmission()` returns `{ final: 0 }` for a facet that is no longer scored, instead of scoring it as Shooting.
+  - `courses.js`: the shooting entry of `COURSE_GROUPS` was removed. Saved shooting course documents stay in Firestore but are not shown.
+  - `customforms.js`: the shooting choice of `COURSE_GROUP_CHOICES` was removed; a form saved with it falls back to "Any course".
+  - `app.js`, `attempts.js`, `scoringeditor.js`, `formulas.js`: every hard-coded list of four facets now uses `FACET_ORDER`, and every "all four" / "/4" text uses the facet count ("Completed all three facets", "2/3").
+  - `builtInSubmissions()` (and with it the leaderboard, statistics, attempts lists, and PDFs) only includes the three remaining facets.
+  - The example drivers on the Scoring settings page no longer have a Shooting column.
+- **Name autofill removed:**
+  - `app.js` and `customforms.js` no longer read or write `localStorage["drivelab-last-name"]`, and no longer put the name back into the form after submitting. `init()` removes the old key.
+  - `fields.js` adds `autocomplete="off"` to text inputs.
+  - The help texts "Your recent local name is suggested." and the Practice page and Admin page notes about name suggestions were updated.
+- **New observation:** `OBSERVATIONS` in `constants.js` gains "Sporadic / Jittery Movement". The Analysis Filters menu now lists every drill form's observation choices plus any value found in recorded attempts (see Update 50, where the choices become editable).
+
+**Files affected:** `js/constants.js`, `js/scoring.js`, `js/courses.js`, `js/customforms.js`, `js/fields.js`, `js/app.js`, `js/attempts.js`, `js/scoringeditor.js`, `js/formulas.js`
+
+### Update 48: Overall score formula for three facets
+
+**Problem with the previous version:** The coverage-first overall score was built for four facets: 2.5 points per completed facet, plus 0.249 × the facet average, plus 0.01 when all four were complete. With Shooting only removed, no driver could complete all four facets. The best possible score would have been 7.49, and the bands no longer described the drills that exist.
+
+**How it was fixed (simple):** The overall score is now calculated for three facets. Each completed facet is worth one third of the 10-point scale, so the bands are:
+
+- 1 facet: 0.00–3.32
+- 2 facets: 3.33–6.66
+- all 3 facets: 6.68–10.00
+
+A driver with more facets completed still always ranks above one with fewer, and a perfect driver scores exactly 10.00.
+
+All existing attempts were updated automatically: every overall score, leaderboard rank, and statistic is recalculated from the attempts when the page loads, and drill scores (Speed, Defensive, Offensive) are unchanged.
+
+The other two ranking methods also work with three facets. The default facet weights are an equal split (33.34 / 33.33 / 33.33%). Saved weights from the four-facet version are converted automatically, keeping the three drills' relative weights.
+
+**How it was fixed (technical detail):**
+
+- `scoring.js` adds `coverageNumbers(n = FACET_COUNT)`: band = 10 / n, scale = (band − 0.01) / 10, bonus = 0.01. With 4 facets this gives the old 2.5 / 0.249 / 0.01; with 3 it gives 3.333… / 0.32333… / 0.01.
+  - `overallFromFacets()` uses band × (K − 1) + scale × average + bonus when K = n.
+  - The "missing counts as 0" method now divides by the weight total, so it is always out of 10.
+- Default `overall.weights` are `{ speed: 33.34, defense: 33.33, offense: 33.33 }`. `weightsEqual()` treats weights within 0.011 of each other as equal, so the facet average stays a plain average.
+  - The Scoring settings "Make weights add up to 100%" button now rounds to 2 decimals (33.33 / 33.33 / 33.34) instead of 1.
+- Migration: `normalizeScoring()` handles a saved `overall.weights` that still contains `shooting`. Equal weights become the new equal split; unequal weights are rescaled to add up to 100% (for example 40 / 20 / 20 / 20 becomes 50 / 25 / 25). The settings document is rewritten in the new form the next time an administrator saves scoring settings.
+- `formulas.js` generates the Analysis explanation, PDF lines, and score-band table from `coverageNumbers()` and `FACET_COUNT`. It shows "10/3 × (K − 1) + 0.3233 × Ā + 0.01 × [K = 3]", the bands come from all 2³ − 1 facet combinations, and the example driver completes all three facets.
+- Checks:
+  - 150,000 random Speed, Defensive, and Offensive attempts score bit-for-bit the same as in release 1.3.2.
+  - 100,000 random drivers match the three-facet formula exactly.
+  - The bands do not overlap (0–3.32, 3.33–6.66, 6.68–10.00).
+
+**Files affected:** `js/scoring.js`, `js/formulas.js`, `js/scoringeditor.js`
+
+### Update 49: Sort the recorded attempts by any column
+
+**Problem with the previous version:** The attempts lists were always ordered by when each attempt was recorded, newest first. Finding the best scores, the earliest practices, or all attempts on one course meant searching or scrolling.
+
+**How it was fixed (simple):** In **All recorded attempts**, each drill's attempts list, and their enlarged views, a column heading with a ↕ arrow can be clicked to sort by it. Clicking it again reverses the order, and the column shows ▲ or ▼.
+
+| Column | First click | Second click |
+| --- | --- | --- |
+| Date, Recorded | Earliest first | Latest first |
+| Final score, and every number column (times, splits, penalties, preventions, fuel, evasions, and added number or rating questions) | Highest first | Lowest first |
+| Grade | 9th to 12th | 12th to 9th |
+| Drill, Course, Robot | A to Z | Z to A |
+
+- Attempts with no value (for example no course recorded) always go to the bottom.
+- Driver, Responses, Observations, Notes, partner, timer, and Actions cannot be sorted.
+- While a list is sorted, "Sorted by …" and a **Reset sorting** button appear next to the Filters menu. Reset sorting returns to the default order (most recently recorded first) and hides itself again. It is hidden whenever the list is in its default order.
+- The sort works together with search and filters, and the enlarged view uses the same sort.
+
+**How it was fixed (technical detail):**
+
+- `attempts.js`:
+  - `sorters(state, facet)` defines each sortable column's value and first direction. `sortList()` sorts with empty values last and ties in the default order. The sort is kept in `state.attemptSort[scope]`, where `null` means the default.
+  - `tableHtml()` columns carry a sort key. Sortable headings are `<button class="th-sort" data-sort="…">` with `aria-sort` on the `<th>`, so they work from the keyboard.
+  - Clicking a heading (event delegation on the panel) redraws only the table and moves focus back to that heading. `sortResetHtml()` / `sortDescription()` draw the status and Reset button, which `redrawTable()` shows or hides.
+- `css/styles.css`: `.th-sort`, `.sort-arrow`, and `.sort-status`.
+
+**Files affected:** `js/attempts.js`, `css/styles.css`
+
+### Update 50: Administrators can edit the built-in drill forms
+
+**Problem with the previous version:** The Speed, Defensive, and Offensive forms were fixed in the code. Changing a description or question wording, or adding a question, needed a programmer, while custom forms could be changed by anyone with administrator access.
+
+**How it was fixed (simple):**
+
+- **Edit form button:** administrators now see an **Edit form** button above every form on the Practice form tab: the three drills and custom forms. Students and other visitors don't see it, and administrators can still fill in and submit the forms normally. The **Form builder** tab also lists the three drill forms under **Built-in drill forms**, with Open form, Edit, and (once changed) **Restore original**.
+- **What can be changed:** the drill form opens in the same editor as a custom form. Administrators can change:
+  - the form description;
+  - section titles and descriptions;
+  - every question's wording, description, and hint;
+  - the order of questions and sections;
+  - the coach-observation choices.
+
+  They can also add new sections and questions of any type (number, short text, paragraph, multiple choice, tick boxes, dropdown, rating scale).
+- **Built-in questions:** the drill's original questions are marked **Built-in**. They can be reworded, described, and moved, but not deleted or changed to another type, because the drill's score, timer, and Analysis use them. A section holding built-in questions cannot be deleted.
+- **What stays fixed:** the drill name, the timer (still at the top of the Driver performance section), and the scoring (still set on the Scoring settings page).
+- **Preview, save, restore:** **Preview** shows the form as recorders will see it. **Save form** returns to the Practice form tab with the new version. **Restore original form** removes the changes.
+- **Answers to added questions:** these are saved with the attempt. They appear as extra columns in the drill's attempts list, in the enlarged view's responses, in search, and in the Edit attempt pop-up, where older attempts show them as **No answer yet** so they can be filled in later. Number and rating questions can be sorted.
+
+**How it was fixed (technical detail):**
+
+- **Data model:**
+  - The new module `js/drillforms.js` turns each drill into a form in the custom-form shape. `defaultDrillForm(facet)` builds it from `FACETS`: Driver information, Driver performance (`role: "performance"`, which holds the timer), and Coach observations (the `observation` tick boxes and `notes`). Each original question is `{ field: "<data key>", locked: true, help, shortLabel }`.
+  - `drillForm(state, facet)` returns the saved version or the original. A saved version is repaired against the original: a missing original question is put back in its section, unknown or duplicate ones are dropped, and the title, type, id, and required flag always come from the original. A reworded question loses its short column heading so tables show the new wording.
+- **Storage:** an edited drill form is saved with `store.saveRecord("customForms", …)` under the id `builtin-<drill>` with `builtin: "<drill>"`. The existing `customForms` rule (everyone can read; only administrators can write) applies, so `firestore.rules` is unchanged and nothing needs publishing. `isDrillForm()` keeps these documents out of the custom-form lists, the Practice form's custom cards, and the Analysis view list. `normalizeForm()` now keeps `builtin`, `role`, `field`, `locked`, `help`, and `shortLabel`.
+- **Rendering:** `drillFormHtml(form, facet, …)` draws the Practice form, the Form builder preview (timer shown as a placeholder), and the Edit attempt pop-up (`edit: true`). Built-in questions use `fieldHtml()` and keep their element ids and names, so the timer, Lap Split, and scoring code are unchanged. Added questions use `questionHtml()` from `customforms.js` (now exported, with `checkRequiredGroups()` and `answerText()`).
+- **Saving answers:** built-in answers are saved exactly as before (`data.totalTime`, `data.observations`, …). Added questions' answers go to `data.answers[<question id>]` (`collectAnswers(addedPart(form))`), and their raw form keys are removed from `data`. Editing an attempt merges the answers and keeps answers to questions since removed.
+- **Form builder:** `formbuilder.js` adds:
+  - `lockedQuestionEditor()`: a fixed type badge, no delete, required state shown as text, and a hint box; for observations, the choices box.
+  - `drillEditor()`: fixed title; no course, ranking, or tool settings; a **Restore original form** button.
+  - The **Built-in drill forms** list, `restoreDrill()` (removes `builtin-<drill>`), and `closeEditor()`, which returns to the Practice form tab when the editor was opened from there (`state.formReturn`). `q-del` and `s-del` ignore built-in questions and their sections.
+- **Fix found while testing:** the Form builder preview's form stayed inside the closed pop-up, so the page held two elements with the same ids (for example `#totalTime`). The preview pop-up is now emptied when it closes (this affected custom-form previews too).
+- **Analysis:** `attempts.js` uses the current wording for column headings and responses, adds a column per added question to each drill's attempts list, includes added answers in the enlarged view's Responses and in search, and fills them in the Edit pop-up (`fillCustom()`).
+- `util.js` adds `blocksToText()`, the reverse of `textToBlocks()`, to turn the original descriptions into editable text.
+
+**Files affected:** `js/drillforms.js` (new), `js/formbuilder.js`, `js/customforms.js`, `js/attempts.js`, `js/app.js`, `js/fields.js`, `js/util.js`, `css/styles.css`
+
+### Update 51: Testing for this release
+
+**Problem with the previous version:** Not a problem with the site: this release changes the scoring, the forms, and every Analysis list together, so it needed checks across all of them.
+
+**How it was fixed (simple):** Every change in Updates 47–50 was tested in the browser as an administrator and as a visitor, on desktop and phone sizes, in light and dark mode. The earlier tests for saving, the calendar, courses, per-course scoring, editing attempts, filters, and the enlarged views were run again and still pass.
+
+**How it was fixed (technical detail):** The browser tests check:
+
+- three drill cards; empty name boxes with `autocomplete="off"`; the old remembered name is deleted; and the new observation is saved;
+- editing the Speed form: description, a reworded question, a hint, and a new number question. Then submitting an attempt that saves `data.answers` with no stray keys, filling the new question in for an older attempt, and restoring the original form;
+- no Edit form button for visitors;
+- the Analysis views and tiles without Shooting; sorting by Date, Final score, and Recorded in both directions; Reset sorting hidden or shown correctly; and the sort shared with the enlarged view;
+- old four-facet weights becoming 33.34 / 33.33 / 33.33;
+- PDFs, and every page at 390 px with no sideways scrolling.
+
+All module imports and `store.*` calls resolve, and there are no page errors.
+
+**Files affected:** none (testing only)

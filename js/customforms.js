@@ -7,7 +7,7 @@
 //                 tool: { type: "none" | "stopwatch" | "countdown", seconds: 90, fillQuestionId: "" },
 //                 questions: [ { id, type, label, description, required, optionsText, min, max, scaleMax } ] } ],
 //   ranking: { questionId: "" | "q3", direction: "higher" | "lower" },     which number/scale question ranks the drivers
-//   courseGroup: "all" | "speed" | "defense" | "shooting",                 which courses the Course driven question lists
+//   courseGroup: "all" | "speed" | "defense",                            which courses the Course driven question lists
 //   nextId, createdAt, updatedAt
 // }
 // Question types: number, text (short), paragraph (long), choice (radio buttons), checkbox, dropdown, scale (1 to scaleMax).
@@ -31,10 +31,9 @@ export const COURSE_GROUP_CHOICES = [
 	["all", "Any course (every published course)"],
 	["speed", "Speed driving courses"],
 	["defense", "Defensive + Offensive driving courses"],
-	["shooting", "Shooting only courses"],
 ];
 const BASE_FIELDS = [
-	["driverName", "Driver name", "text", true, "First name with last initial. Your recent local name is suggested."],
+	["driverName", "Driver name", "text", true, "First name with last initial."],
 	["grade", "Driver grade level", "select", true],
 	["practiceDate", "Practice date", "date", true],
 	["course", "Course driven", "course", true, "Choose the layout used today. The layouts are on the Courses page."],
@@ -78,6 +77,7 @@ export function normalizeForm(raw) {
 		fillQuestionId: t?.fillQuestionId || "",
 	});
 	return {
+		...(raw.builtin ? { builtin: raw.builtin } : {}),
 		id: raw.id,
 		title: raw.title ?? raw.name ?? "",
 		description: raw.description || "",
@@ -86,7 +86,10 @@ export function normalizeForm(raw) {
 			title: s.title || "",
 			description: s.description || "",
 			tool: tool(s.tool),
+			// Built-in drill forms (drillforms.js) mark their sections with a `role` and their fixed questions with `field` / `locked`.
+			...(s.role ? { role: s.role } : {}),
 			questions: (s.questions || []).map((q) => ({
+				...(q.field ? { field: q.field, locked: true, help: q.help || "", shortLabel: q.shortLabel || "" } : {}),
 				id: q.id,
 				type: q.type || "text",
 				label: q.label || "",
@@ -123,7 +126,7 @@ const descBox = (id, text) =>
 		? `<div class="q-desc" id="${id}-desc">${blocksHtml(textToBlocks(text))}</div>`
 		: "";
 
-function questionHtml(q, form, edit = false) {
+export function questionHtml(q, form, edit = false) {
 	const id = q.id,
 		req = q.required && !edit, // an administrator editing an old attempt may leave questions unanswered
 		desc = descBox(id, q.description),
@@ -349,7 +352,7 @@ export const metricOf = (form, answers) => {
 };
 
 // A required checkbox group needs at least one box ticked, which the browser cannot check natively, so it is done here.
-function checkRequiredGroups(formEl) {
+export function checkRequiredGroups(formEl) {
 	let ok = true;
 	formEl
 		.querySelectorAll('[data-checkgroup][data-required="true"]')
@@ -374,9 +377,7 @@ export function bindCustomForm(form, ctx, { preview = false } = {}) {
 		.forEach((box) =>
 			box.addEventListener("change", () => checkRequiredGroups(formEl)),
 		);
-	const cached = localStorage.getItem("drivelab-last-name");
-	if (cached && !preview) formEl.querySelector("#driverName").value = cached;
-	formEl.querySelector("#practiceDate").value = todayKey();
+	formEl.querySelector("#practiceDate").value = todayKey(); // names are always typed in; nothing is pre-filled (Update 47)
 	formEl.onsubmit = async (e) => {
 		e.preventDefault();
 		if (preview) return ctx.toast("This is only a preview. Nothing was saved.");
@@ -397,11 +398,9 @@ export function bindCustomForm(form, ctx, { preview = false } = {}) {
 		try {
 			await ctx.store.addSubmission(item);
 			ctx.state.data.submissions.push(item);
-			localStorage.setItem("drivelab-last-name", item.driverName);
 			ctx.toast(`${form.title}: practice recorded.`);
 			formEl.reset();
 			formEl.querySelector("#practiceDate").value = todayKey();
-			formEl.querySelector("#driverName").value = item.driverName;
 		} catch (err) {
 			ctx.toast(`Could not save: ${err.message}`);
 		}
@@ -414,7 +413,7 @@ const mean = (list) =>
 const fmt = (n) => Number(n).toFixed(2);
 const newestFirst = (a, b) => b.createdAt.localeCompare(a.createdAt);
 const finite = (v) => typeof v === "number" && Number.isFinite(v);
-const answerText = (q, value) =>
+export const answerText = (q, value) =>
 	Array.isArray(value)
 		? value.join(", ") || "--"
 		: value === null || value === undefined || value === ""

@@ -26,7 +26,7 @@
 // The robots a driver can drive. Every form (built-in and custom) asks which one was driven.
 export const ROBOTS = ["REBUILT Robot", "REEFSCAPE Robot", "Swerve Chassis"];
 // Which course family each drill is driven on (defense and offense share the paired-drill courses). See courses.js.
-export const FACET_COURSE_GROUP = { speed: "speed", defense: "defense", offense: "defense", shooting: "shooting" };
+export const FACET_COURSE_GROUP = { speed: "speed", defense: "defense", offense: "defense" };
 // The two questions every form shares. The course answer selects the course's own scoring settings (scoring.js).
 const COURSE_FIELD = [
 	"course",
@@ -37,7 +37,7 @@ const COURSE_FIELD = [
 ];
 const robotField = (label) => ["robot", label, "robot", true];
 
-// Shared by the Speed and Shooting forms (identical rule text).
+// The penalty rules (shown on the Speed driving form).
 const PENALTY_DESCRIPTION = [
 	"1 penalty is added if the driver does any of the following:",
 	[
@@ -60,7 +60,7 @@ const DRIVER_2_NAME = "Driver 2 name (Defensive driver; REEFSCAPE)";
 const DRIVER_2_GRADE = "Driver 2 grade level (Defensive driver)";
 // Extra hint on the driver who is being ASSESSED on that form (the name saved on the leaderboard).
 const ASSESSED_HINT =
-	"This is the driver being assessed on this form. First name with last initial. Your recent local name is suggested.";
+	"This is the driver being assessed on this form. First name with last initial.";
 
 export const FACETS = {
 	speed: {
@@ -76,7 +76,7 @@ export const FACETS = {
 				"Driver name",
 				"text",
 				true,
-				"First name with last initial. Your recent local name is suggested.",
+				"First name with last initial.",
 			],
 			["grade", "Driver grade level", "select", true],
 			["practiceDate", "Practice date", "date", true],
@@ -245,46 +245,7 @@ export const FACETS = {
 		],
 	},
 
-	shooting: {
-		label: "Shooting only",
-		short: "SHOOTING",
-		timer: "countdown",
-		intro: [
-			"This driving practice form assesses the driver's ability to score as many points as possible in an allotted time.",
-			[
-				"Drivers will have 90 seconds to score as much fuel as possible.",
-				"They will start with no fuel inside the robot.",
-				"They can pick up fuel from either side of the field, along with fuel scattered around the course.",
-			],
-		],
-		driverFields: [
-			[
-				"driverName",
-				"Driver name",
-				"text",
-				true,
-				"First name with last initial. Your recent local name is suggested.",
-			],
-			["grade", "Driver grade level", "select", true],
-			["practiceDate", "Practice date", "date", true],
-			COURSE_FIELD,
-			robotField("Robot driven"),
-		],
-		fields: [
-			["fuelShot", "Total fuel shot", "number", true],
-			["fuelScored", "Fuel scored", "number", true],
-			// The help line is kept from the previous version: it states a rule that is not part of the shared penalty description.
-			[
-				"penalties",
-				"Number of penalties received",
-				"number",
-				true,
-				"Includes driving after 90 seconds.",
-				PENALTY_DESCRIPTION,
-				"Penalties received",
-			],
-		],
-	},
 };
+// Shooting only was removed in Update 47. Attempts saved for it stay in the database but are no longer shown or counted.
 export const GRADES = ["9th", "10th", "11th", "12th"];
-export const OBSERVATIONS = ["Speed", "Agility", "Smooth driving"];
+export const OBSERVATIONS = ["Speed", "Agility", "Smooth driving", "Sporadic / Jittery Movement"];

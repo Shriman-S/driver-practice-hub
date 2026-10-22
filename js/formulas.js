@@ -20,6 +20,9 @@ import {
 	accuracyScore,
 	overallFromFacets,
 	settingsFor,
+	coverageNumbers,
+	FACET_COUNT,
+	weightsEqual as weightsClose,
 } from "./scoring.js";
 import { esc } from "./util.js";
 import { FACET_COURSE_GROUP } from "./constants.js";
@@ -45,8 +48,10 @@ const pct = (w) => `${fmt(w)}%`;
 const list = (items) =>
 	items.length <= 1 ? items.join("") : `${items.slice(0, -1).join(", ")} and ${items[items.length - 1]}`;
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
-export const FACET_NAMES = { speed: "Speed driving", defense: "Defensive driving", offense: "Offensive driving", shooting: "Shooting only" };
-const FACET_SHORT = { speed: "Speed", defense: "Defense", offense: "Offense", shooting: "Shooting" };
+export const FACET_NAMES = { speed: "Speed driving", defense: "Defensive driving", offense: "Offensive driving" };
+const FACET_SHORT = { speed: "Speed", defense: "Defense", offense: "Offense" };
+// "three" for the drill count, used in the explanations.
+const COUNT_WORD = ["zero", "one", "two", "three", "four", "five"][FACET_COUNT] || String(FACET_COUNT);
 
 // ---------------------------------------------------------------- original design notes (shown only while a part is unchanged)
 const DESIGN = {
@@ -61,13 +66,8 @@ const DESIGN = {
 	"offense.shot": "30 shots in 90 seconds is the benchmark, so the score grows steadily with every extra cycle.",
 	"offense.scored": "Points on the board are what win matches, so this is the core output measure.",
 	"offense.accuracy": "A ratio rather than a count, so it rewards clean shooting at any volume and stops a driver from scoring well just by spraying shots.",
-	"offense.evasion": "Evading defense is the skill that sets this drill apart from Shooting only.",
+	"offense.evasion": "Evading defense is the skill that sets this drill apart from plain shooting practice.",
 	"offense.final": "Fuel scored is the largest single part because it is the result that counts. Accuracy and evasion share equal weight so a driver must both shoot cleanly and get free of the defender, and volume rewards fast cycling without letting it dominate.",
-	"shooting.shot": "30 shots in 90 seconds is the benchmark, so the score grows steadily with every extra cycle.",
-	"shooting.scored": "Points on the board are what win matches, so this is the core output measure.",
-	"shooting.accuracy": "A ratio rather than a count, so it rewards clean shooting at any volume and stops a driver from scoring well just by spraying shots.",
-	"shooting.penalty": "Penalties (including driving after 90 seconds) are a small deduction because the drill is about scoring.",
-	"shooting.final": "With no defender, the drill is a pure test of scoring output, so fuel scored carries almost half the weight. Accuracy keeps shot selection honest, and penalties are a small deduction.",
 };
 
 // ---------------------------------------------------------------- one component: equation + generated explanation
@@ -198,14 +198,19 @@ export function facetCard(key, label, cfg, courseKey = "", subtitle = "") {
 }
 
 // ---------------------------------------------------------------- overall ranking
-const weightsEqual = (cfg) => FACET_ORDER.every((k) => Number(cfg.overall.weights[k]) === Number(cfg.overall.weights.speed));
+const weightsEqual = (cfg) => weightsClose(FACET_ORDER.map((k) => Number(cfg.overall.weights[k])));
+// Coverage-first numbers for display: 10/3 is shown as a fraction, the scale with 4 decimals.
+const cov = coverageNumbers();
+const bandText = Number.isInteger(cov.band * 100) ? fmt(cov.band) : `10/${FACET_COUNT}`;
+const bandHtml = Number.isInteger(cov.band * 100) ? fmt(cov.band) : frac("10", String(FACET_COUNT));
+const scaleText = String(Math.round(cov.scale * 10000) / 10000);
 const weightList = (cfg) => FACET_ORDER.map((k) => `${FACET_SHORT[k]} ${pct(cfg.overall.weights[k])}`).join(", ");
 
 // The lowest and highest overall score possible for each number of completed facets, worked out by the scoring code itself.
 export function overallBands(cfg) {
 	const subsets = [];
-	for (let mask = 1; mask < 16; mask++) subsets.push(FACET_ORDER.filter((_, i) => mask & (1 << i)));
-	return [1, 2, 3, 4].map((k) => {
+	for (let mask = 1; mask < 2 ** FACET_COUNT; mask++) subsets.push(FACET_ORDER.filter((_, i) => mask & (1 << i)));
+	return FACET_ORDER.map((_, i) => i + 1).map((k) => {
 		const mine = subsets.filter((s) => s.length === k);
 		const at = (value) => mine.map((s) => overallFromFacets(Object.fromEntries(s.map((f) => [f, value])), cfg).overall);
 		return { k, low: Math.min(...at(0)), high: Math.max(...at(10)) };
@@ -214,8 +219,8 @@ export function overallBands(cfg) {
 // The two drivers from the original scoring explanation, scored with the current settings.
 function exampleDrivers(cfg) {
 	const a = overallFromFacets({ speed: 10 }, cfg).overall;
-	const b = overallFromFacets({ speed: 6, defense: 6, offense: 6, shooting: 6 }, cfg).overall;
-	return `Example: Driver A completed only Speed with 10.00 and scores ${two(a)}; Driver B scored 6.00 in all four facets and scores ${two(b)}, so ${a > b ? "Driver A ranks higher" : a < b ? "Driver B ranks higher" : "they tie"}.`;
+	const b = overallFromFacets(Object.fromEntries(FACET_ORDER.map((k) => [k, 6])), cfg).overall;
+	return `Example: Driver A completed only Speed with 10.00 and scores ${two(a)}; Driver B scored 6.00 in all ${COUNT_WORD} facets and scores ${two(b)}, so ${a > b ? "Driver A ranks higher" : a < b ? "Driver B ranks higher" : "they tie"}.`;
 }
 export function overallDoc(cfg) {
 	const o = cfg.overall;
@@ -236,9 +241,10 @@ export function overallDoc(cfg) {
 		vars = `each facet value is the driver's ${rule} in that facet, or 0 if the facet has not been completed.`;
 		why = `Every facet is always included, so a facet that has not been completed counts as 0. Completing more facets usually helps, but a strong score in one facet can outrank a weak score spread over more facets. ${weightNote}`;
 	} else {
-		eq = `${v("Overall")} = 2.5${times}${paren(`${v("K")}${minus}1`)} + 0.249${times}${v("Ā")} + 0.01${times}[${v("K")} = 4]`;
-		vars = `${v("K")} = number of facets completed (1-4), ${v("Ā")} = ${avgWord} of the driver's ${rule} in each completed facet, [${v("K")} = 4] = 1 when all four are complete, otherwise 0.`;
-		why = `Coverage first: each extra facet adds 2.5 points, while the average can add at most 0.249 × 10 = 2.49. A driver with more facets completed therefore always ranks above one with fewer, and the average only decides order among drivers with the same coverage. The 0.01 bonus lifts every four-facet driver above 7.50, so the four bands never overlap. ${weightNote}`;
+		const bandTop = two(cov.band * (FACET_COUNT - 1)); // where the all-facets band starts (before the bonus)
+		eq = `${v("Overall")} = ${bandHtml}${times}${paren(`${v("K")}${minus}1`)} + ${scaleText}${times}${v("Ā")} + 0.01${times}[${v("K")} = ${FACET_COUNT}]`;
+		vars = `${v("K")} = number of facets completed (1-${FACET_COUNT}), ${v("Ā")} = ${avgWord} of the driver's ${rule} in each completed facet, [${v("K")} = ${FACET_COUNT}] = 1 when all ${COUNT_WORD} are complete, otherwise 0.`;
+		why = `Coverage first: each extra facet adds ${bandText} (${two(cov.band)}) points, while the average can add at most ${scaleText} × 10 = ${two(cov.scale * 10)}. A driver with more facets completed therefore always ranks above one with fewer, and the average only decides order among drivers with the same coverage. The 0.01 bonus lifts every driver who completed all ${COUNT_WORD} facets above ${bandTop}, so the bands never overlap, and a perfect driver scores exactly 10.00. ${weightNote}`;
 	}
 	return { eq, vars, why: `${why} ${exampleDrivers(cfg)}`, method: OVERALL_METHODS[o.method].label };
 }
@@ -260,7 +266,7 @@ export function overallLegend(cfg) {
 	if (o.method === "average") return `Overall = ${avg} of the completed facet scores (each facet uses the driver's ${rule}).`;
 	if (o.method === "missingZero")
 		return `Overall = ${FACET_ORDER.map((k) => `${mult(o.weights[k])} × ${FACET_SHORT[k]}`).join(" + ")}, with a facet that is not completed counted as 0 (each facet uses the driver's ${rule}).`;
-	return `Overall = 2.5 × (completed facets − 1) + 0.249 × ${avg} of the completed facet scores, plus 0.01 when all four are complete (each facet uses the driver's ${rule}).`;
+	return `Overall = ${bandText} × (completed facets − 1) + ${scaleText} × ${avg} of the completed facet scores, plus 0.01 when all ${COUNT_WORD} are complete (each facet uses the driver's ${rule}).`;
 }
 export function overallPdfLines(cfg) {
 	const bands = overallBands(cfg)
@@ -316,7 +322,7 @@ export function changesFromDefault(cfg, courseNames = {}) {
 		d = DEFAULT_SCORING.overall;
 	if (o.method !== d.method) out.push(`Overall ranking method: ${OVERALL_METHODS[o.method].label} (was ${OVERALL_METHODS[d.method].label})`);
 	if (o.attempt !== d.attempt) out.push(`Each facet now uses the driver's ${ATTEMPT_RULES[o.attempt].short} (was the ${ATTEMPT_RULES[d.attempt].short})`);
-	if (!same(o.weights, d.weights)) out.push(`Overall facet weights: ${weightList(cfg)} (was 25% each)`);
+	if (!same(o.weights, d.weights)) out.push(`Overall facet weights: ${weightList(cfg)} (was an equal share each)`);
 	return out;
 }
 function changesHtml(cfg, courseNames) {

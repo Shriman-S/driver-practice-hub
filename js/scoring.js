@@ -1,4 +1,4 @@
-// Scoring for the four built-in drills and the coverage-first overall ranking.
+// Scoring for the built-in drills (Speed, Defensive, Offensive driving) and the coverage-first overall ranking.
 //
 // Every number that shapes a score (weights, benchmarks, curves, penalty costs, how the overall ranking is built) lives in a
 // SCORING SETTINGS object. Each drill has DEFAULT settings (cfg.facets[facet]) and may have its OWN settings for each course
@@ -17,7 +17,10 @@ const num = (value) => {
 	const n = Number(value);
 	return Number.isFinite(n) ? n : 0;
 };
-export const FACET_ORDER = ["speed", "defense", "offense", "shooting"];
+// The drills that make up a driver's overall score. (Shooting only was removed in Update 47; its saved attempts stay in the database
+// but are no longer shown or counted anywhere.)
+export const FACET_ORDER = ["speed", "defense", "offense"];
+export const FACET_COUNT = FACET_ORDER.length;
 
 // ---------------------------------------------------------------- component types
 // Each facet score is a weighted sum of components, and every component is one of four types:
@@ -49,12 +52,6 @@ export const COMPONENTS = {
 		{ key: "scored", kind: "range", label: "Fuel scored", symbol: "S", input: "fuelScored", variable: "scored", unit: "", unitWord: "scored fuel", inputLabel: "fuel scored", per: "scored fuel" },
 		{ key: "accuracy", kind: "accuracy", label: "Accuracy", symbol: "A", inputs: ["fuelScored", "fuelShot"] },
 		{ key: "evasion", kind: "range", label: "Evasions", symbol: "E", input: "evasions", variable: "evasions", unit: "", unitWord: "evasions", inputLabel: "successful evasions", per: "evasion" },
-	],
-	shooting: [
-		{ key: "shot", kind: "range", label: "Volume (fuel shot)", symbol: "V", input: "fuelShot", variable: "shots", unit: "", unitWord: "shots", inputLabel: "fuel shot", per: "shot" },
-		{ key: "scored", kind: "range", label: "Fuel scored", symbol: "S", input: "fuelScored", variable: "scored", unit: "", unitWord: "scored fuel", inputLabel: "fuel scored", per: "scored fuel" },
-		{ key: "accuracy", kind: "accuracy", label: "Accuracy", symbol: "A", inputs: ["fuelScored", "fuelShot"] },
-		{ key: "penalty", kind: "penalty", label: "Penalties", symbol: "N", input: "penalties" },
 	],
 };
 // The overall ranking methods an administrator can choose from.
@@ -97,23 +94,21 @@ export const DEFAULT_SCORING = {
 			accuracy: { weight: 25, target: 100 },
 			evasion: { weight: 25, zero: 0, full: 5, curve: "linear" },
 		},
-		shooting: {
-			shot: { weight: 20, zero: 0, full: 30, curve: "linear" },
-			scored: { weight: 45, zero: 0, full: 20, curve: "linear" },
-			accuracy: { weight: 25, target: 100 },
-			penalty: { weight: 10, perPenalty: 2 },
-		},
 	},
 	overall: {
 		method: "coverage",
 		attempt: "latest",
-		weights: { speed: 25, defense: 25, offense: 25, shooting: 25 },
+		// Equal shares of 100% (100 / 3 cannot be written exactly, so one drill carries the extra 0.01). Weights within 0.011 of
+		// each other count as equal, so the facet average is then the plain average.
+		weights: { speed: 33.34, defense: 33.33, offense: 33.33 },
 	},
 	// Per-course settings, same shape as facets[facet]. Empty means every course uses its drill's default settings.
-	byCourse: { speed: {}, defense: {}, offense: {}, shooting: {} },
+	byCourse: { speed: {}, defense: {}, offense: {} },
 };
-// Course ids look like "speed-1" ... "shooting-3"; defense and offense both use the "defense-N" (paired drill) courses.
-export const COURSE_KEY = /^(speed|defense|shooting)-[1-3]$/;
+// Course ids look like "speed-1" ... "defense-3"; defense and offense both use the "defense-N" (paired drill) courses.
+export const COURSE_KEY = /^(speed|defense)-[1-3]$/;
+// Weights this close together are treated as equal (so 33.34 / 33.33 / 33.33 is an equal split).
+export const weightsEqual = (values) => Math.max(...values) - Math.min(...values) <= 0.011;
 // The settings that score an attempt of `facet` driven on `courseKey`.
 export function settingsFor(config, facet, courseKey) {
 	return (courseKey && config.byCourse?.[facet]?.[courseKey]) || config.facets[facet];
@@ -148,9 +143,18 @@ export function normalizeScoring(saved) {
 	const o = saved.overall || {};
 	if (OVERALL_METHODS[o.method]) out.overall.method = o.method;
 	if (ATTEMPT_RULES[o.attempt]) out.overall.attempt = o.attempt;
-	for (const facet of FACET_ORDER)
-		if (Number.isFinite(Number(o.weights?.[facet])) && o.weights?.[facet] !== "")
-			out.overall.weights[facet] = Number(o.weights[facet]);
+	const valid = (w) => Number.isFinite(Number(w)) && w !== "" && w !== null;
+	if (o.weights && "shooting" in o.weights) {
+		// Saved before Shooting only was removed: keep the three drills' relative weights, rescaled to add up to 100%.
+		const kept = FACET_ORDER.map((f) => (valid(o.weights[f]) ? Number(o.weights[f]) : 0));
+		const total = kept.reduce((a, b) => a + b, 0);
+		if (total > 0 && !weightsEqual(kept)) {
+			const scaled = kept.map((w) => Math.round(((w * 100) / total) * 100) / 100);
+			const big = scaled.indexOf(Math.max(...scaled));
+			scaled[big] = Math.round((scaled[big] + 100 - scaled.reduce((a, b) => a + b, 0)) * 100) / 100;
+			FACET_ORDER.forEach((f, i) => (out.overall.weights[f] = scaled[i]));
+		}
+	} else for (const facet of FACET_ORDER) if (valid(o.weights?.[facet])) out.overall.weights[facet] = Number(o.weights[facet]);
 	if (saved.updatedAt) out.updatedAt = String(saved.updatedAt);
 	return out;
 }
@@ -159,7 +163,7 @@ export function normalizeScoring(saved) {
 export function validateScoring(cfg) {
 	const problems = [];
 	const bad = (v) => v === "" || v === null || v === undefined || !Number.isFinite(Number(v));
-	const facetNames = { speed: "Speed driving", defense: "Defensive driving", offense: "Offensive driving", shooting: "Shooting only" };
+	const facetNames = { speed: "Speed driving", defense: "Defensive driving", offense: "Offensive driving" };
 	const checkSet = (facet, settings, title) => {
 		let total = 0;
 		for (const c of COMPONENTS[facet]) {
@@ -234,7 +238,8 @@ export function componentScore(component, settings, d) {
 // The score of one built-in drill attempt: every component (0-10) plus `final`, all rounded to two decimals.
 // The component keys (time, pace, penalty, scoring, fuel, wasted, shot, scored, accuracy, evasion) are the same as before.
 export function scoreSubmission(submission, config = DEFAULT_SCORING) {
-	const facet = COMPONENTS[submission.facet] ? submission.facet : "shooting";
+	if (!COMPONENTS[submission.facet]) return { final: 0 }; // not a scored drill (for example an old Shooting only attempt)
+	const facet = submission.facet;
 	const d = submission.data || {};
 	const settings = settingsFor(config, facet, d.course); // the course's own settings, or the drill's default
 	const parts = {};
@@ -260,6 +265,13 @@ export function facetValue(entries, rule = "latest") {
 	return [...entries].sort(newest)[0].score.final;
 }
 // The overall number from the facet values a driver has ({ speed: 7.2, ... } with missing facets left out).
+// The coverage-first constants for FACET_COUNT drills. Each completed drill adds one BAND (10 / drills); the facet average (0-10) adds
+// at most one band minus 0.01, so a driver can never catch up with someone who completed more drills; completing every drill adds
+// the 0.01 back, so a perfect driver scores exactly 10. With 4 drills this was 2.5 / 0.249 / 0.01; with 3 it is 3.333 / 0.3233 / 0.01.
+export function coverageNumbers(n = FACET_COUNT) {
+	const band = 10 / n;
+	return { band, scale: (band - 0.01) / 10, bonus: 0.01 };
+}
 export function overallFromFacets(facets, config = DEFAULT_SCORING) {
 	const o = config.overall;
 	// Facets are summed in the order they appear in `facets` (the order attempts were found), as the original code did.
@@ -268,7 +280,7 @@ export function overallFromFacets(facets, config = DEFAULT_SCORING) {
 	const weightDone = done.reduce((t, k) => t + Number(o.weights[k]), 0);
 	// Weighted average of the completed facets (a plain average when the weights are equal).
 	// When the completed facets all have the same weight this is exactly sum / count (the original formula, bit-for-bit).
-	const equal = done.every((k) => Number(o.weights[k]) === Number(o.weights[done[0]]));
+	const equal = weightsEqual(done.map((k) => Number(o.weights[k])));
 	const average = !completed || weightDone <= 0
 		? 0
 		: equal
@@ -277,10 +289,16 @@ export function overallFromFacets(facets, config = DEFAULT_SCORING) {
 	let overall = 0;
 	if (completed) {
 		if (o.method === "average") overall = average;
-		else if (o.method === "missingZero")
-			overall = FACET_ORDER.reduce((t, k) => t + (Number(o.weights[k]) / 100) * (facets[k] ?? 0), 0);
-		// Coverage-first rule: more completed facets always outweighs isolated excellence.
-		else overall = 2.5 * (completed - 1) + 0.249 * average + (completed === 4 ? 0.01 : 0);
+		else if (o.method === "missingZero") {
+			// Every drill counts; one that is not completed counts as 0. Divided by the weight total so it is always out of 10.
+			const all = FACET_ORDER.reduce((t, k) => t + Number(o.weights[k]), 0) || 1;
+			overall = FACET_ORDER.reduce((t, k) => t + Number(o.weights[k]) * (facets[k] ?? 0), 0) / all;
+		}
+		// Coverage-first rule: more completed facets always outweighs isolated excellence (see coverageNumbers()).
+		else {
+			const c = coverageNumbers();
+			overall = c.band * (completed - 1) + c.scale * average + (completed === FACET_COUNT ? c.bonus : 0);
+		}
 	}
 	return { completed, average: round(average), overall: round(overall) };
 }

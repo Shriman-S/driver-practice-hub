@@ -2355,3 +2355,110 @@ dialog.edit-modal #modal-content {
 dialog.sheet .sheet-content .sheet-table {
 	flex: 0 1 auto; /* as tall as its rows, up to all the space in the layer; scrolls inside it when there are more drivers */
 }
+
+/* ---- Edit form button (administrators) and editable built-in drill forms ---- */
+.form-admin-bar {
+	display: flex;
+	flex-wrap: wrap;
+	justify-content: space-between;
+	align-items: center;
+	gap: 10px;
+	margin: 0 0 12px;
+	padding: 10px 14px;
+	border: 1px dashed var(--line);
+	border-radius: 10px;
+	font-size: 13px;
+	color: var(--muted);
+	background: var(--panel);
+}
+.b-locked {
+	border-left: 3px solid var(--blue);
+}
+.b-fixed-type {
+	font-size: 11px;
+	font-weight: 800;
+	white-space: nowrap;
+	color: var(--blue);
+	background: var(--pill-bg);
+	border-radius: 999px;
+	padding: 3px 9px;
+}
+.b-lock-note {
+	margin: 2px 0 0;
+	display: block;
+}
+.b-fixed {
+	font-weight: 800;
+	font-size: 16px;
+	padding: 8px 0 2px;
+}
+.drill-status {
+	font-size: 10px;
+	font-weight: 800;
+	text-transform: uppercase;
+	letter-spacing: 0.03em;
+	border-radius: 999px;
+	padding: 2px 7px;
+	margin-left: 6px;
+	color: var(--muted);
+	background: var(--pill-bg);
+	vertical-align: middle;
+}
+.drill-status.edited {
+	color: var(--notice-ink);
+	background: var(--notice-bg);
+}
+.timer-placeholder {
+	display: flex;
+	gap: 10px;
+	align-items: center;
+	padding: 14px 16px;
+	border: 1px dashed var(--timer-line);
+	border-radius: 10px;
+	background: var(--timer-bg);
+	margin-bottom: 14px;
+}
+.timer-placeholder .tag {
+	margin: 0;
+}
+
+/* ---- Sortable column headings (recorded attempts) ---- */
+.th-sort {
+	all: unset;
+	cursor: pointer;
+	display: inline-flex;
+	align-items: center;
+	gap: 5px;
+	font: inherit;
+	color: inherit;
+	text-transform: inherit;
+	letter-spacing: inherit;
+	border-radius: 4px;
+}
+.th-sort:hover,
+.th-sort.active {
+	color: var(--ink);
+}
+.th-sort:focus-visible {
+	outline: 2px solid var(--accent);
+	outline-offset: 2px;
+}
+.sort-arrow {
+	font-size: 10px;
+	opacity: 0.45;
+}
+.th-sort.active .sort-arrow {
+	opacity: 1;
+	color: var(--accent);
+}
+.sort-status {
+	display: inline-flex;
+	align-items: center;
+	gap: 8px;
+	font-size: 12px;
+	font-weight: 650;
+	color: var(--muted);
+}
+.sort-status[hidden] {
+	display: none;
+}
