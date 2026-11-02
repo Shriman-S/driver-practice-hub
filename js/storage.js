@@ -249,3 +249,135 @@ export async function getIdToken() {
 	if (!canUseGoogleCalendar()) throw new Error("Sign in as an administrator first.");
 	return remote.firebaseAuth.currentUser.getIdToken();
 }
+
+// ---------------------------------------------------------------- Territory Breakthrough matches (see territory.js)
+// A match is ONE small document (`matches/<code>`) that both scoring laptops watch live. It carries only the match set-up and the
+// shared round state (who is ready, the exact start time, who has finished scoring); the scores themselves are saved as normal
+// submissions. In local preview mode (no Firebase) the same document lives in localStorage and syncs between tabs of one browser.
+//
+// Why this works on two laptops that can each only open http://localhost:5000: both pages talk to the SAME Firebase database, so
+// neither laptop needs to reach the other. Each one subscribes to the match document with a live listener; when the second scorer
+// is ready, one of them writes a start time (in SERVER time) a few seconds ahead, and both laptops start their timers at that
+// moment (their own clocks are corrected with measured offsets, see syncClock()).
+const matchKey = (id) => `drivelab-match-${id}`;
+const localWatchers = new Map(); // id -> Set(callback), for the tab that wrote the change (the `storage` event covers other tabs)
+const readLocalMatch = (id) => {
+	try {
+		return JSON.parse(localStorage.getItem(matchKey(id)));
+	} catch {
+		return null;
+	}
+};
+const setDeep = (object, path, value) => {
+	const keys = path.split(".");
+	let target = object;
+	for (const key of keys.slice(0, -1)) target = target[key] = target[key] && typeof target[key] === "object" ? target[key] : {};
+	target[keys.at(-1)] = value;
+};
+const notifyLocal = (id) => localWatchers.get(id)?.forEach((callback) => callback(readLocalMatch(id)));
+export async function createMatch(match) {
+	const clean = JSON.parse(JSON.stringify(match));
+	if (!remote) {
+		if (readLocalMatch(clean.id)) throw new Error("That match code is already in use.");
+		localStorage.setItem(matchKey(clean.id), JSON.stringify(clean));
+		return;
+	}
+	await ensureGuest();
+	const ref = remote.firestore.doc(remote.db, "matches", clean.id);
+	// Create only: an existing match code is never overwritten (the rules also refuse a create over an existing document).
+	let exists = false;
+	try {
+		exists = (await remote.firestore.getDoc(ref)).exists();
+	} catch (error) {
+		if (error.code !== "permission-denied") throw error;
+	}
+	if (exists) throw new Error("That match code is already in use.");
+	await remote.firestore.setDoc(ref, clean);
+}
+export async function getMatch(id) {
+	if (!remote) return readLocalMatch(id);
+	await ensureGuest();
+	const snap = await remote.firestore.getDoc(remote.firestore.doc(remote.db, "matches", id));
+	return snap.exists() ? snap.data() : null;
+}
+// Changes some fields of a match. `patch` keys may be dotted paths ("ready.off"), so the two laptops never overwrite each other's field.
+export async function patchMatch(id, patch) {
+	if (!remote) {
+		const match = readLocalMatch(id);
+		if (!match) throw new Error("That match no longer exists.");
+		for (const [path, value] of Object.entries(patch)) setDeep(match, path, value);
+		localStorage.setItem(matchKey(id), JSON.stringify(match));
+		notifyLocal(id);
+		return;
+	}
+	await ensureGuest();
+	await remote.firestore.updateDoc(remote.firestore.doc(remote.db, "matches", id), patch);
+}
+// Calls `callback(match)` now and every time the match changes (on either laptop). Returns a function that stops listening.
+export function watchMatch(id, callback, onError = () => {}) {
+	if (!remote) {
+		const set = localWatchers.get(id) || new Set();
+		localWatchers.set(id, set);
+		set.add(callback);
+		const onStorage = (event) => event.key === matchKey(id) && callback(readLocalMatch(id));
+		window.addEventListener("storage", onStorage);
+		callback(readLocalMatch(id));
+		return () => {
+			set.delete(callback);
+			window.removeEventListener("storage", onStorage);
+		};
+	}
+	let stop = () => {};
+	ensureGuest()
+		.then(() => {
+			stop = remote.firestore.onSnapshot(remote.firestore.doc(remote.db, "matches", id), (snap) => callback(snap.exists() ? snap.data() : null), onError);
+		})
+		.catch(onError);
+	return () => stop();
+}
+// How far this computer's clock is from the database server's clock, in milliseconds (server time = Date.now() + offset).
+// Measured by writing a server timestamp and reading it back: the server stamps the write about halfway through the round trip, so
+// offset = serverStamp - (send + receive) / 2. The measurement with the shortest round trip (the most accurate) of several is used.
+// Local preview mode has one clock, so the offset is 0.
+export async function syncClock(id, role) {
+	if (!remote) return { offset: 0, error: 0 };
+	await ensureGuest();
+	const f = remote.firestore;
+	const ref = f.doc(remote.db, "matches", id);
+	let best = null;
+	let lastProblem = "the server did not return a time stamp";
+	// Each probe writes a server timestamp and then reads it back. The value can come back as a Timestamp, a Date or a plain
+	// {seconds, nanoseconds} object depending on the SDK settings, so every form is accepted.
+	const toMillis = (v) => {
+		if (!v) return null;
+		if (typeof v.toMillis === "function") return v.toMillis();
+		if (v instanceof Date) return v.getTime();
+		if (typeof v.seconds === "number") return v.seconds * 1000 + Math.round((v.nanoseconds || 0) / 1e6);
+		if (typeof v === "number") return v;
+		return null;
+	};
+	for (let i = 0; i < 5; i++) {
+		try {
+			const sent = Date.now();
+			await f.updateDoc(ref, { [`probe.${role}`]: f.serverTimestamp() });
+			// Read the data back from the server (not the local cache, which would hold an unresolved placeholder).
+			const snap = await (f.getDocFromServer ? f.getDocFromServer(ref) : f.getDoc(ref));
+			const received = Date.now();
+			const stamp = toMillis(snap.data()?.probe?.[role]);
+			if (stamp === null) {
+				lastProblem = "the match record came back without the probe time stamp";
+				continue;
+			}
+			const sample = { offset: Math.round(stamp - (sent + received) / 2), error: Math.round((received - sent) / 2) };
+			if (!best || sample.error < best.error) best = sample;
+		} catch (error) {
+			lastProblem = error.code ? `${error.code}: ${error.message}` : error.message;
+		}
+	}
+	if (!best) throw new Error(lastProblem);
+	return best;
+}
+export async function removeMatch(id) {
+	if (!remote) return localStorage.removeItem(matchKey(id));
+	await remote.firestore.deleteDoc(remote.firestore.doc(remote.db, "matches", id));
+}

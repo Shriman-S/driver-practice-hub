@@ -9,6 +9,8 @@
 // Markup helpers: v() is a variable, frac() a stacked fraction, clamp() the "limit to 0-10" wrapper used by every component.
 import {
 	COMPONENTS,
+	COMPONENT_FACETS,
+	TERRITORY_FACETS,
 	CURVES,
 	DEFAULT_SCORING,
 	FACET_ORDER,
@@ -25,6 +27,7 @@ import {
 	weightsEqual as weightsClose,
 } from "./scoring.js";
 import { esc } from "./util.js";
+import { offensePoints, defensePoints, pool as territoryPool, TERRITORY_DEFAULTS as DEFAULT_TERRITORY, BONUS_CURVES, RANK_BASES } from "./territorycore.js";
 import { FACET_COURSE_GROUP } from "./constants.js";
 import { publishedCourses, courseLabel } from "./courses.js";
 
@@ -175,8 +178,8 @@ function weightSentence(items) {
 }
 
 // Everything the Analysis page needs to explain one facet: each component, the final weighted equation, and its explanation.
-export function facetDoc(facet, cfg, courseKey = "") {
-	const settings = settingsFor(cfg, facet, courseKey);
+export function facetDoc(facet, cfg, courseKey = "", robot = "") {
+	const settings = settingsFor(cfg, facet, courseKey, robot);
 	const components = COMPONENTS[facet].map((c) => componentDoc(facet, c, settings[c.key]));
 	const terms = COMPONENTS[facet]
 		.filter((c) => Number(settings[c.key].weight) > 0)
@@ -190,11 +193,54 @@ export function facetDoc(facet, cfg, courseKey = "") {
 }
 
 const designHtml = (text) => (text ? `<p class="eq-design"><strong>Design note:</strong> ${esc(text)}</p>` : "");
-export function facetCard(key, label, cfg, courseKey = "", subtitle = "") {
-	const d = facetDoc(key, cfg, courseKey);
+export function facetCard(key, label, cfg, courseKey = "", subtitle = "", robot = "") {
+	if (TERRITORY_FACETS.includes(key)) return territoryCard(key, label, cfg);
+	const d = facetDoc(key, cfg, courseKey, robot);
 	return `<article class="eq-card"><h4>${esc(label)}${subtitle ? ` <small class="eq-method">${esc(subtitle)}</small>` : ""}</h4>${d.components
 		.map((c) => `<div class="eq-row"><p class="eq-name">${esc(c.name)}</p><div class="eq">${c.eq}</div><p class="eq-why">${esc(c.text)}</p>${designHtml(c.design)}</div>`)
 		.join("")}<div class="eq-row eq-final"><p class="eq-name">Final score</p><div class="eq">${d.final}</div><p class="eq-why">${esc(d.why)}</p>${designHtml(d.design)}</div>${d.vars ? `<p class="eq-vars">Where ${d.vars}</p>` : ""}</article>`;
+}
+
+// ---------------------------------------------------------------- Territory Breakthrough (Offensive / Defensive driving)
+const TERRITORY_NAMES = {
+	duration: ["round length", (n) => `${n} s`],
+	gate1Points: ["points for G1", (n) => `${n}`],
+	gate2Points: ["points for G2", (n) => `${n}`],
+	gate3Points: ["points for G3", (n) => `${n}`],
+	finishPoints: ["finish points", (n) => `${n}`],
+	timeBonus: ["maximum time bonus", (n) => `${n}`],
+	bonusCurve: ["time bonus curve", (n) => BONUS_CURVES[n]?.label.replace(" (recommended)", "") || n],
+	penaltyPoints: ["points lost per penalty", (n) => `${n}`],
+	countdown: ["start countdown", (n) => `${n} s`],
+	rankBasis: ["ranking basis", (n) => RANK_BASES[n]?.label.replace(" (recommended)", "") || n],
+	recentRounds: ["number of recent rounds", (n) => `${n}`],
+	priorScore: ["assumed score for new drivers", (n) => `${n}`],
+	priorWeight: ["weight of the assumed score", (n) => `${n} rounds`],
+	pairWeightOffense: ["pairing weight for offense", (n) => `${n}`],
+	pairWeightDefense: ["pairing weight for defense", (n) => `${n}`],
+};
+// The Offensive and Defensive formulas, written out from the current settings, with worked example rounds.
+export function territoryCard(facet, label, cfg) {
+	const t = cfg.territory || DEFAULT_TERRITORY;
+	const T = t.duration, total = territoryPool(t);
+	const off = facet === "offense";
+	const g = [t.gate1Points, t.gate2Points, t.gate3Points];
+	const same = g[0] === g[1] && g[1] === g[2];
+	const curve = BONUS_CURVES[t.bonusCurve] || BONUS_CURVES.linear;
+	const x = `${frac(`${T} − ${v("t")}`, T)}`;
+	const cx = t.bonusCurve === "strict" ? `${x}<sup>2</sup>` : t.bonusCurve === "generous" ? `√${paren(x)}` : x;
+	const pen = t.penaltyPoints ? ` − ${t.penaltyPoints} × ${v("n")}` : "";
+	const gateTerm = same ? `${mult(g[0])}${off ? v("G") : paren(`3 − ${v("G")}`)}` : off ? `${v("P")}<sub>crossed</sub>` : `${v("P")}<sub>denied</sub>`;
+	const eq = off
+		? `${v("O")} = ${gateTerm} + ${mult(t.finishPoints)}${v("F")} + ${t.timeBonus} × ${cx} × ${v("F")}${pen}`
+		: `${v("D")} = ${gateTerm} + ${mult(t.finishPoints)}${paren(`1 − ${v("F")}`)} + ${t.timeBonus} × ${paren(`1 − ${cx} × ${v("F")}`)}${pen}`;
+	const cases = [["Finishes in 30 s", { g1: 5, g2: 10, g3: 20, finishTime: 30 }], ["Finishes in 40 s", { g1: 5, g2: 10, g3: 20, finishTime: 40 }], ["Crosses 2 gates, no finish", { g1: 5, g2: 10 }], ["Crosses 1 gate, no finish", { g1: 5 }], ["Crosses no gates", {}]];
+	const rows = cases.map(([name, d]) => `<tr><td>${esc(name)}</td><td>${two(offensePoints(d, t).points)}</td><td>${two(defensePoints(d, t).points)}</td></tr>`).join("");
+	return `<article class="eq-card"><h4>${esc(label)} <small class="eq-method">Territory Breakthrough</small></h4>
+  <div class="eq-row"><p class="eq-name">${off ? "Offensive" : "Defensive"} points for one round (out of ${two(total)})</p><div class="eq">${eq}</div>
+  <p class="eq-why">${v("G")} = checkpoints crossed in order (0 to 3), ${v("F")} = 1 if the finish zone was reached (after G3), otherwise 0, ${v("t")} = finish time in seconds (${T} when the robot does not finish)${t.penaltyPoints ? `, ${v("n")} = penalties received` : ""}. Checkpoint points: G1 = ${g[0]}, G2 = ${g[1]}, G3 = ${g[2]}${same ? "" : `; ${v("P")} adds up the ${off ? "crossed" : "denied"} ones`}. ${off ? "The time bonus is only earned by completing the whole route." : "The defender earns the checkpoints and finish that were denied, and the part of the time bonus the offense did not earn."} Time bonus curve: ${esc(curve.label.replace(" (recommended)", ""))}. ${t.penaltyPoints ? `Each penalty costs ${t.penaltyPoints} point${t.penaltyPoints === 1 ? "" : "s"} (never below 0), so the two scores may add up to a little less than ${two(total)}.` : `The offensive and defensive points of a round always add up to ${two(total)}.`}</p></div>
+  <div class="eq-row eq-final"><p class="eq-name">Stored score and rankings</p><div class="eq">${v("Score")} = ${v(off ? "O" : "D")} ÷ ${two(total)} × 10</div><p class="eq-why">Drivers are ranked in each role by ${esc(RANK_BASES[t.rankBasis]?.label.replace(" (recommended)", "").toLowerCase() || "the mean")}${t.rankBasis === "recent" ? ` (the latest ${t.recentRounds})` : ""}. The two drivers alternate roles each round and the driver with more points wins the round; a match is won by winning 2 of 3 rounds. Pairing suggestions (administrators) start each driver from an assumed ${t.priorScore} for ${t.priorWeight} round${t.priorWeight === 1 ? "" : "s"} and weigh offensive and defensive skill gaps ${t.pairWeightOffense} : ${t.pairWeightDefense}.</p></div>
+  <div class="table-wrap"><table><thead><tr><th>Example round</th><th>Offense</th><th>Defense</th></tr></thead><tbody>${rows}</tbody></table></div></article>`;
 }
 
 // ---------------------------------------------------------------- overall ranking
@@ -292,7 +338,7 @@ const SETTING_NAMES = {
 };
 export function changesFromDefault(cfg, courseNames = {}) {
 	const out = [];
-	for (const facet of FACET_ORDER)
+	for (const facet of COMPONENT_FACETS)
 		for (const c of COMPONENTS[facet]) {
 			const now = cfg.facets[facet][c.key],
 				was = DEFAULT_SCORING.facets[facet][c.key];
@@ -305,7 +351,7 @@ export function changesFromDefault(cfg, courseNames = {}) {
 			if (diffs.length) out.push(`${FACET_NAMES[facet]}, ${c.label}: ${diffs.join("; ")}`);
 		}
 	// Courses with their own settings: every difference from the original DriveLab scoring for that drill.
-	for (const facet of FACET_ORDER)
+	for (const facet of COMPONENT_FACETS)
 		for (const [key, own] of Object.entries(cfg.byCourse?.[facet] || {})) {
 			const name = courseNames?.[key] || `Course ${key.split("-")[1]}`;
 			const diffs = [];
@@ -318,6 +364,16 @@ export function changesFromDefault(cfg, courseNames = {}) {
 			}
 			out.push(`${FACET_NAMES[facet]}, ${name} has its own settings${diffs.length ? ` (${diffs.join(" · ")})` : " (currently the same as the original scoring)"}`);
 		}
+	for (const facet of COMPONENT_FACETS) for (const [key, profiles] of Object.entries(cfg.byRobot?.[facet] || {})) for (const [profile, own] of Object.entries(profiles || {})) {
+		const name = courseNames?.[key] || `Course ${key.split("-")[1]}`, diffs = [];
+		for (const c of COMPONENTS[facet]) {
+			const was = DEFAULT_SCORING.facets[facet][c.key];
+			const parts = Object.keys(was).filter(k => own[c.key][k] !== was[k]).map(k => `${SETTING_NAMES[k][0]} ${SETTING_NAMES[k][1](own[c.key][k])}`);
+			if (parts.length) diffs.push(`${c.label}: ${parts.join("; ")}`);
+		}
+		out.push(`${FACET_NAMES[facet]}, ${name} (${profile === "swerve" ? "Swerve" : "Mecanum"}) has its own settings${diffs.length ? ` (${diffs.join(" · ")})` : " (currently the same as the original scoring)"}`);
+	}
+	for (const [k, [name, show]] of Object.entries(TERRITORY_NAMES)) if (cfg.territory && Number(cfg.territory[k]) !== Number(DEFAULT_SCORING.territory[k])) out.push(`Territory Breakthrough, ${name}: ${show(cfg.territory[k])} (was ${show(DEFAULT_SCORING.territory[k])})`);
 	const o = cfg.overall,
 		d = DEFAULT_SCORING.overall;
 	if (o.method !== d.method) out.push(`Overall ranking method: ${OVERALL_METHODS[o.method].label} (was ${OVERALL_METHODS[d.method].label})`);
@@ -339,13 +395,18 @@ const CLAMP_NOTE = `<p class="eq-note"><strong>clamp(x)</strong> limits a value 
 
 // Which settings apply to which courses for one drill: the default card (with the courses that use it) and one card per course that
 // has its own settings. `courses` is state.data.courses (for course names).
-export function facetCourseCards(facet, label, cfg, courses = {}) {
+export function facetCourseCards(facet, label, cfg, courses = {}, robot = "") {
+	if (TERRITORY_FACETS.includes(facet)) return territoryCard(facet, label, cfg);
 	const own = cfg.byCourse?.[facet] || {};
 	const published = publishedCourses(courses, FACET_COURSE_GROUP[facet]);
 	const usingDefault = ["attempts with no course recorded", ...published.filter((c) => !own[c.key]).map((c) => c.name)];
 	const ownKeys = Object.keys(own).sort();
-	const cards = [facetCard(facet, label, cfg, "", ownKeys.length || published.length ? `Default settings: used by ${list(usingDefault)}` : "")];
-	for (const key of ownKeys) cards.push(facetCard(facet, label, cfg, key, `${courseLabel(courses, key)} (its own settings)`));
+	const cards = [facetCard(facet, label, cfg, "", ownKeys.length || published.length ? `Default settings: used when no course override exists` : "", robot)];
+	for (const key of ownKeys) cards.push(facetCard(facet, label, cfg, key, `${courseLabel(courses, key)} (${robot === "Swerve Chassis" ? "Swerve" : "Mecanum"} settings)`, robot));
+	for (const [key, profiles] of Object.entries(cfg.byRobot?.[facet] || {})) for (const [profile] of Object.entries(profiles || {})) {
+		const labelRobot = profile === "swerve" ? "Swerve Chassis" : "REBUILT / REEFSCAPE Mecanum";
+		cards.push(facetCard(facet, label, cfg, key, `${courseLabel(courses, key)} (${labelRobot} settings)`, profile === "swerve" ? "Swerve Chassis" : "REBUILT Robot"));
+	}
 	return cards.join("");
 }
 export const courseNameMap = (courses = {}) =>

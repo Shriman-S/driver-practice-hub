@@ -13,7 +13,7 @@
 //    edited); Cancel closes without saving.
 import { FACETS, GRADES, OBSERVATIONS, ROBOTS, FACET_COURSE_GROUP } from "./constants.js";
 import { fieldHtml, courseOptions } from "./fields.js";
-import { courseLabel, COURSE_GROUPS, publishedCourses } from "./courses.js";
+import { courseLabel, courseIsDeleted, COURSE_GROUPS, publishedCourses } from "./courses.js";
 import { scoreSubmission, FACET_ORDER } from "./scoring.js";
 import { esc, now, dateText } from "./util.js";
 import {
@@ -27,6 +27,8 @@ import {
 	metricOf,
 	answerText,
 } from "./customforms.js";
+import { openEditTerritoryAttempt, territorySummaryCell, openTerritoryResponses } from "./territoryanalysis.js";
+import { feedbackQuestions, territoryFormId } from "./territorycore.js";
 import { drillForm, drillFormHtml, drillLabel, addedQuestions, addedPart, observationChoices } from "./drillforms.js";
 
 const FACET_KEYS = FACET_ORDER; // the scored drills (Shooting only was removed in Update 47)
@@ -43,19 +45,16 @@ export function attemptLabelOf(state, x) {
 const courseOf = (x) => x.data?.course || "";
 const robotOf = (x) => x.data?.robot || "";
 // The other driver in a paired drill.
-const partnerOf = (x) =>
-	x.facet === "defense"
-		? [x.data?.opponentName, x.data?.opponentGrade].filter(Boolean).join(", ")
-		: x.facet === "offense"
-			? [x.data?.defenderName, x.data?.defenderGrade].filter(Boolean).join(", ")
-			: "";
+const partnerOf = (x) => (x.data?.mode === "territory" ? [x.data.opponentName, x.data.opponentGrade].filter(Boolean).join(", ") : "");
 // Every scored or recorded answer as "Question: answer" pairs (the Responses column of the enlarged view).
 function responses(state, x) {
 	if (FACETS[x.facet]) {
 		const def = drillForm(state, x.facet);
 		const scored = FACETS[x.facet].fields.map((f) => [drillLabel(def, f[0]), x.data?.[f[0]] ?? ""]);
 		const added = addedQuestions(def).map((q) => [q.label, answerText(q, x.data?.answers?.[q.id])]);
-		return [...scored, ...added].filter(([, v]) => v !== "" && v !== "--" && v !== null);
+		const role = x.facet;
+		const coach = x.data?.mode === "territory" ? feedbackQuestions(state.data.customForms.find((f) => f.id === territoryFormId(role)), role).map((q) => [q.label, Array.isArray(x.data.answers?.[q.id]) ? x.data.answers[q.id].join(", ") : x.data.answers?.[q.id] ?? ""]) : [];
+		return [...scored, ...added, ...coach].filter(([, v]) => v !== "" && v !== "--" && v !== null);
 	}
 	const form = customFormOf(state, x);
 	if (!form) return [];
@@ -218,17 +217,20 @@ function tableHtml(state, scope, list, expanded) {
 	const cols = [
 		["Date", (x) => `<td class="nowrap">${dateText(x.date)}${x.editedAt ? ' <span class="edited-pill" title="Edited ' + esc(when(x.editedAt)) + '">Edited</span>' : ""}</td>`, "date"],
 		...(facet ? [] : [["Drill", (x) => `<td>${esc(attemptLabelOf(state, x))}</td>`, "drill"]]),
-		["Driver", (x) => `<td><strong>${esc(x.driverName)}</strong></td>`, null],
+		["Driver", (x) => `<td>${facet && !["speed", "defense", "offense"].includes(facet) ? `<strong>${esc(x.driverName)}</strong>` : `<button class="driver-link" data-driver-detail="${esc(x.driverName)}">${esc(x.driverName)}</button>`}</td>`, null],
 		["Grade", (x) => `<td>${esc(x.grade)}</td>`, "grade"],
-		["Course", (x) => (courseOf(x) ? `<td>${esc(courseLabel(courses, courseOf(x)))}</td>` : '<td class="missing">Not recorded</td>'), "course"],
+		["Course", (x) => (courseOf(x) ? (courseIsDeleted(courses, courseOf(x)) ? `<td class="course-deleted"><span class="deleted-pill">Deleted course</span> ${esc(courseLabel(courses, courseOf(x)).replace("Deleted course ", ""))}</td>` : `<td>${esc(courseLabel(courses, courseOf(x)))}</td>`) : '<td class="missing">Not recorded</td>'), "course"],
 		["Robot", (x) => (robotOf(x) ? `<td class="nowrap">${esc(robotOf(x))}</td>` : '<td class="missing">Not recorded</td>'), "robot"],
-		...(expanded && paired ? [[facet === "defense" ? "Driver 1 (opponent)" : "Driver 2 (defender)", (x) => `<td>${esc(partnerOf(x) || "--")}</td>`, null]] : []),
+		...(paired ? [["Round", (x) => `<td class="nowrap">${x.data?.round ? `Round ${esc(x.data.round)}` : "--"}</td>`, null], ["Points", (x) => `<td>${x.score?.points !== undefined ? esc(x.score.points) : "--"}</td>`, null]] : []),
+		...(expanded && paired ? [["Opponent", (x) => `<td>${esc(partnerOf(x) || "--")}</td>`, null]] : []),
 		...(expanded && facet === "speed" ? [["Timer / observer", (x) => `<td>${esc(x.data?.timerName || "--")}</td>`, null]] : []),
 		...numeric.map((f) => [drillLabel(def, f[0]), (x) => `<td>${esc(x.data?.[f[0]] ?? "--")}</td>`, `f:${f[0]}`]),
 		...added.map((q) => [q.label, (x) => `<td>${esc(answerText(q, x.data?.answers?.[q.id]))}</td>`, keys[`q:${q.id}`] ? `q:${q.id}` : null]),
 		...(expanded && !facet
-			? [["Responses", (x) => `<td class="resp-cell">${responses(state, x).map(([q, v]) => `<span><b>${esc(q)}:</b> ${esc(v)}</span>`).join("") || "--"}</td>`, null]]
+			? [["Responses", (x) => summaryCell(state, x), null]]
 			: []),
+		// Every drill and form gets the same readable summary and "View responses" button in its own table too.
+		...(facet ? [["Responses", (x) => summaryCell(state, x), null]] : []),
 		["Final score", (x) => `<td><strong>${score2(x.score?.final ?? 0)}</strong></td>`, "final"],
 		["Observations", (x) => `<td>${esc(x.data?.observations?.join(", ") || "--")}</td>`, null],
 		...(facet || expanded ? [["Notes", (x) => `<td class="note-cell${expanded ? " wide" : ""}" title="${esc(x.data?.notes || "")}">${esc(x.data?.notes || "--")}</td>`, null]] : []),
@@ -364,6 +366,8 @@ export function bindAttemptsSections(root, api) {
 				redrawTable();
 				return section.querySelector("[data-attempt-search]")?.focus();
 			}
+			const view = e.target.closest("[data-view-responses]");
+			if (view) return openResponseView(api, view.dataset.viewResponses);
 			const edit = e.target.closest("[data-edit-attempt]");
 			if (edit) return openEditAttempt(api, edit.dataset.editAttempt);
 			const del = e.target.closest("[data-delete-attempt]");
@@ -503,6 +507,7 @@ export function openEditAttempt(api, id) {
 	if (!state.session.isAdmin) return;
 	const x = state.data.submissions.find((s) => s.id === id);
 	if (!x) return;
+	if (x.data?.mode === "territory") return openEditTerritoryAttempt(api, id);
 	const form = customFormOf(state, x);
 	if (!FACETS[x.facet] && !form) return api.toast("This attempt's custom form was deleted, so it can no longer be edited.");
 	const original = x.original || snapshot(x);
@@ -578,4 +583,57 @@ export function openEditAttempt(api, id) {
 		api.render();
 		api.toast(item.editedAt ? "Attempt updated." : "Attempt restored to its original values.");
 	};
+}
+
+// ================================================================ reading one attempt's responses
+// Every drill and form (Speed, Offensive / Defensive, and any custom form, now or later) opens the same readable layout: the facts about
+// the attempt, the measured results, then each answer grouped by kind (ratings as dots, choices as chips, written answers as quoted
+// blocks), then the coach observations and notes. The tables show only a short summary and a button, because a full set of answers
+// does not fit a table cell.
+function questionsFor(state, x) {
+	if (FACETS[x.facet]) return addedQuestions(drillForm(state, x.facet));
+	const form = customFormOf(state, x);
+	return form ? allQuestions(form) : [];
+}
+const filled = (v) => v !== undefined && v !== null && v !== "" && !(Array.isArray(v) && !v.length);
+function summaryCell(state, x) {
+	if (x.data?.mode === "territory") return territorySummaryCell(state, x);
+	const qs = questionsFor(state, x);
+	const answered = qs.filter((q) => filled(x.data?.answers?.[q.id]));
+	const written = answered.filter((q) => q.type === "paragraph").length;
+	const pill = (t) => `<span class="resp-pill">${t}</span>`;
+	const obs = x.data?.observations?.length || 0;
+	return `<td class="resp-cell"><div class="resp-pills">${pill(`Score ${score2(x.score?.final ?? 0)}/10`)}${answered.length ? pill(`${answered.length} answer${answered.length === 1 ? "" : "s"}`) : ""}${written ? pill(`${written} written`) : ""}${obs ? pill(`${obs} observation${obs === 1 ? "" : "s"}`) : ""}${filled(x.data?.notes) ? pill("Notes") : ""}</div><button type="button" class="button button-secondary button-small" data-view-responses="${esc(x.id)}">View responses</button></td>`;
+}
+function openResponseView(api, id) {
+	const x = api.state.data.submissions.find((s) => s.id === id);
+	if (!x) return;
+	if (x.data?.mode === "territory") return openTerritoryResponses(api, id);
+	const { state, content, modal } = api;
+	const courses = state.data.courses || {};
+	const d = x.data || {};
+	const tiles = [["Driver", x.driverName + (x.grade ? `, ${x.grade}` : "")], ["Drill", attemptLabelOf(state, x)], ["Date", dateText(x.date)], ["Course", courseOf(x) ? courseLabel(courses, courseOf(x)) : "Not recorded"], ["Robot", robotOf(x) || "Not recorded"], [d.timerName ? "Timer / observer" : "Recorded by", d.timerName || d.scorer || "--"], ["Final score", `${score2(x.score?.final ?? 0)} / 10`]];
+	// Measured results: the scored numbers of a built-in drill, plus any number questions
+	const results = [];
+	if (FACETS[x.facet]) for (const f of FACETS[x.facet].fields) if (filled(d[f[0]])) results.push([drillLabel(drillForm(state, x.facet), f[0]), d[f[0]]]);
+	const qs = questionsFor(state, x);
+	const val = (q) => d.answers?.[q.id];
+	for (const q of qs) if (q.type === "number" && filled(val(q))) results.push([q.label, val(q)]);
+	const dots = (q) => {
+		const max = Number(q.max || q.scaleMax || 5);
+		return `<span class="resp-dots">${Array.from({ length: max }, (_, i) => `<i class="${i < Number(val(q)) ? "on" : ""}"></i>`).join("")}</span> <strong>${esc(val(q))}</strong> / ${max}`;
+	};
+	const item = (q, html) => `<div class="resp-item"><span class="resp-q">${esc(q.label)}</span><div>${html}</div></div>`;
+	const group = (title, list, render) => (list.length ? `<h4>${title}</h4>${list.map((q) => item(q, render(q))).join("")}` : "");
+	const answered = (types) => qs.filter((q) => types.includes(q.type) && filled(val(q)));
+	const chips = (v) => (Array.isArray(v) ? v : [v]).map((o) => `<span class="resp-pill">${esc(o)}</span>`).join(" ");
+	const obs = d.observations || [];
+	content.innerHTML = `<div class="modal-head"><div><p class="eyebrow">${esc(attemptLabelOf(state, x).toUpperCase())}</p><h2>${esc(x.driverName)}, ${esc(dateText(x.date))}</h2></div><button class="close" id="close-modal">\u00d7</button></div>
+  <div class="resp-view"><dl class="resp-meta">${tiles.map(([k, v]) => `<div><dt>${esc(k)}</dt><dd>${esc(v)}</dd></div>`).join("")}</dl>
+  ${results.length ? `<h4>Measured results</h4><div class="table-wrap"><table class="t-run"><thead><tr><th>Measure</th><th>Value</th></tr></thead><tbody>${results.map(([k, v]) => `<tr><td>${esc(k)}</td><td><strong>${esc(v)}</strong></td></tr>`).join("")}</tbody></table></div>` : ""}
+  ${group("Ratings", answered(["scale"]), dots)}${group("Selections and short answers", answered(["choice", "dropdown", "checkbox", "text"]), (q) => chips(val(q)))}${group("Written responses", answered(["paragraph"]), (q) => `<blockquote class="resp-quote">${esc(val(q))}</blockquote>`)}
+  ${obs.length ? `<h4>Coach observations</h4><div class="resp-pills">${chips(obs)}</div>` : ""}${filled(d.notes) ? `<h4>Notes</h4><blockquote class="resp-quote">${esc(d.notes)}</blockquote>` : ""}
+  ${!results.length && !answered(qs.map((q) => q.type)).length && !obs.length && !filled(d.notes) ? '<p class="help">No responses were recorded for this attempt.</p>' : ""}</div>`;
+	content.querySelector("#close-modal").onclick = () => modal.close();
+	if (!modal.open) modal.showModal();
 }

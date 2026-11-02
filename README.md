@@ -2,28 +2,41 @@
 
 DriveLab is a no-cost, GitHub Pages-ready FRC driver-practice tracker. It is designed around the supplied REBUILT / REEFSCAPE form and scoring explanation, but it has an original interface and separated, commented source files.
 
+Release 1.7 replaces the old Defensive and Offensive forms with **Territory Breakthrough**, a best-of-3 Offensive / Defensive match scored from checkpoints crossed (see below). Release 1.4 supports any number of courses per driving facet. Administrators can mark which robots can use each course, and recorders only see compatible courses after choosing a robot. Scoring can be tuned separately for each course and drivetrain profile: REBUILT / REEFSCAPE mecanum or Swerve. Analysis includes individual driver profiles with anonymous peer comparisons and downloadable driver PDFs.
+
 ## Features and no-cost tools
 
 - **Three ready-to-use assessment forms**
-  - Speed, defense, and offense forms include the supplied questions, native stopwatch/countdown controls, coaching observations (Speed, Agility, Smooth driving, Sporadic / Jittery Movement), and their documented scoring weights. (The Shooting only form was removed; its old attempts stay in the database but are not shown or counted.)
+  - The Speed form and the Territory Breakthrough forms (see below) include the supplied questions, native stopwatch/countdown controls, coaching observations (Speed, Agility, Smooth driving, Sporadic / Jittery Movement), and their documented scoring weights. (The Shooting only form was removed; its old attempts stay in the database but are not shown or counted.)
   - Administrators see an **Edit form** button above every form. It opens the form in the Form builder, where the description, sections, question wording, descriptions, and hints can be changed and new questions of any type added. The drill's original questions are marked **Built-in**: they can be reworded and moved but not removed, because the score uses them. **Restore original** brings back the original form.
-  - Every form (including custom forms) asks which **course** was driven (a dropdown of that drill's published courses) and which **robot** was driven (REBUILT Robot, REEFSCAPE Robot, or Swerve Chassis).
-- **Paired defensive/offensive workflow**
-  - Defense and offense are recorded as separate assessments for the two drivers in one 90-second paired session, preserving individual data.
+  - Every form (including custom forms) asks which **course** was driven (a dropdown of that drill's published courses) and which **robot** was driven (REBUILT Robot, REEFSCAPE Robot, or Swerve Chassis). After robot selection, only courses that allow that robot remain available.
+- **Territory Breakthrough (Offense / Defense page)**
+  - Two drivers play a best-of-3 match: **3 rounds of one 60-second run each** (no heats, so a match uses only 3 robot batteries). The drivers alternate roles every round and switch robots with their roles. The Offensive Driver must cross checkpoints **G1, G2, G3 in order** and reach the finish zone while the Defensive Driver tries to stop them. The driver with more points wins the round; winning 2 rounds wins the match.
+  - Scores come only from measurable events: offense = 20 per checkpoint + 20 for finishing + up to 20 for finishing early; defense = 20 per checkpoint denied + 20 if the finish is prevented + up to 20 for delaying the run. The two always add up to 100. Scorers never calculate anything.
+  - Each round has an **Offensive form** and a **Defensive form** (two scorers). Only the Offensive scorer records the checkpoint times; the Defensive scorer sees them appear live and they are used for **both** drivers, so the scores always add up to 100. The round ends the moment Finish is pressed (or when time runs out). Penalties and coach feedback are recorded on each form; coach feedback never changes the score.
+  - **Two laptops (synchronized):** start a match on one laptop, then on the other laptop open **Offense / Defense**, enter the 6-letter match code and choose which form it scores. When both scorers press Ready, both timers start together after a 3-second countdown. Both laptops only need `localhost:5000` and the Firebase connection. **One laptop:** choose this when starting the match to see both forms side by side with one timer.
+  - **Administrators** also see the current Offensive and Defensive rankings and get pairing suggestions (drivers with the closest offensive and defensive skill); everyone else types the driver names manually.
+  - Administrators build the course in the **Course builder** (Defensive + Offensive courses get Checkpoints G1-G3 with direction arrows, Defensive start, D1-D3 areas, and no-go areas), tune the points in **Scoring settings**, and edit the coach feedback questions in **Form builder**. The **Analysis** page has a Territory Breakthrough view (both leaderboards and every match) plus Defensive and Offensive views.
+  - Defensive / Offensive attempts recorded before Release 1.7 stay in the database but are not shown or ranked.
+  - **After upgrading, publish the new `firestore.rules` in Firebase** (it adds the `matches` rule used to sync the two laptops).
 - **Names typed in each time**
   - Names are typed in on every form; the site (and the browser's autofill) does not remember or suggest names.
+  - Answers on a partially completed Practice form stay in place when the recorder switches to another DriveLab tab and returns. This includes custom forms and clears after submission or Clear.
 - **Administrator-only analysis**
   - A spreadsheet-style facet table, score bars, and coverage-first leaderboard (with each driver's number of attempts) compare drivers while keeping raw submissions unreadable to regular users.
   - Every list of recorded attempts can be searched (driver, course, robot, notes, date, answers, and more) and filtered (drill, grade, robot, course, observations, edited, or missing course/robot), and sorted by clicking a column heading (click again to reverse; **Reset sorting** appears while sorted). An **Enlarge** button shows the list over the page with every response and detail.
   - Administrators can **Edit** any recorded attempt in a pop-up that shows the form the driver completed with their answers, including questions added to the form later (for example, adding the course to older attempts). **Revert to original** restores the values first submitted.
   - The Analysis page shows the scoring equations for the overall ranking and every facet. The equations and their explanations are generated automatically from the current scoring settings, so they always describe the formula in use.
+  - Click a driver's name in the leaderboard, standings, or recorded-attempt lists to open their profile. It summarizes built-in driving attempts, facet strengths and growth areas, best-performing course, anonymous peer ranking, and score progress over time. Administrators can export that profile as a PDF; coaching statistics are excluded.
 - **Scoring settings (administrators)**
-  - Each course can have its own scoring values (for example, a longer Speed driving course can have a slower "excellent" time); attempts are scored with the settings of the course they were driven on, and attempts with no course recorded use the drill's default settings.
+  - Each course can have its own scoring values (for example, a longer Speed driving course can have a slower "excellent" time), with separate course settings for REBUILT / REEFSCAPE mecanum robots and the Swerve Chassis. Attempts use matching course and robot settings; attempts without a matching override use the drill's defaults.
   - Change every drill's scoring without typing formulas: a weight for each part, the "full marks" and "zero points" benchmarks, a scoring curve, points lost per penalty, pace strictness, and the accuracy needed for full marks. For General statistics, choose the overall ranking method (coverage first, average of completed facets, or missing facets count as zero), which attempt counts (most recent, best, or average), and the facet weights.
   - A live preview shows exactly what the Analysis page will say. Editable example attempts and example drivers show each score with the saved settings and with the new ones side by side, and the page shows how the change would affect the drivers already recorded. Saving re-scores every recorded attempt from its raw answers.
+  - Each editable setting includes a fuller explanation of what it changes and how it affects the component or overall score.
   - An administrator stays signed in when the page is refreshed, and is signed out by **Log out** or by closing the tab.
 - **Courses and Course builder**
-  - Everyone can view the published course layouts on the **Courses** page (three layouts each for speed and shared defense/offense). Administrators also get Edit, Create, and Delete there.
+  - Everyone can view the published course layouts on the **Courses** page. Administrators can create as many numbered layouts as needed for speed and shared defense/offense, and can Edit or Delete them.
+  - For each layout, administrators select one or more allowed robots. Existing courses without a saved robot list remain available to all robots.
   - Administrators draw a course on the **Course builder** page by clicking and dragging across a 48 x 24 grid; cells fill as the pointer moves. There is an Erase tool (or hold Shift), Undo, and Clear walls.
   - They can also place a green **start** circle and a red **end** square, and trace a **robot path** (arrows show the direction to drive). Speed driving courses can have a separate Lap 1 and Lap 2 path, with a numbered circle where each lap begins and a bar where it ends.
   - Every course shows a **key** listing only the features that course uses, with the matching symbols and colors.
@@ -85,6 +98,9 @@ Do not treat the local preview, a GitHub repository, or a hidden front-end tab a
 | `js/formbuilder.js` | The administrator's Form builder editor. |
 | `js/courses.js` | Course grid painter, Courses page, and course pictures. |
 | `js/pdf.js` | Formatted PDF report builder. |
+| `js/territorycore.js` | Territory Breakthrough rules and formulas (pure logic): scoring, match structure, rankings, pairing suggestions. |
+| `js/territory.js` | The Offense / Defense page: match manager, two-laptop timer sync, scorer forms. |
+| `js/territoryanalysis.js` | Territory Breakthrough Analysis views, scorer-form editor, and Edit-round pop-up. |
 | `js/formulas.js` | Generates the scoring equations and explanations shown on the Analysis page from the current scoring settings (the calculations themselves are in `scoring.js`). |
 | `js/vendor/` | Bundled jsPDF and jsPDF-AutoTable (MIT licensed) used only by the PDF export. |
 | `firestore.rules` | Server-enforced access rules for student information. |

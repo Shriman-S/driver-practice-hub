@@ -7,6 +7,12 @@
 //     end:   { col, row } | null,                             red square: where drivers finish
 //     paths: [ { lap: 1, points: ["5,5", "20,5", ...] }, ... ],  the route drivers follow; each point is "column,row"
 //     updatedAt }
+// Defensive + Offensive (Territory Breakthrough) courses add, on top of the above:
+//     gates:      [ { n: 1, a: "c,r", b: "c,r", dir: 1 }, ... ]   checkpoints G1-G3: a straight line of cells from a to b, crossed in the
+//                                                              direction `dir` (+1 = east for an up-down line / south for a left-right line)
+//     dstart:     { col, row } | null                          the defensive robot's starting area (central)
+//     dpos:       { 1: {col,row}, 2: ..., 3: ... }             defensive positioning areas D1-D3 (coaching analysis only)
+//     restricted: ["0010...", ...]                             cells the defensive robot may not enter (offensive start zone, buffer around the finish)
 // Firestore cannot store an array inside an array, so rows are strings and each path point is a "column,row" string.
 // Speed driving courses can have a path for Lap 1 and a separate path for Lap 2; every other drill has a single Robot path (lap 1).
 // Courses are saved under the id "<group>-<number>", for example "speed-1" or "defense-3" (defense and offense share their courses).
@@ -23,27 +29,78 @@ export const COURSE_GROUPS = [
 	},
 ];
 export const courseKey = (group, number) => `${group}-${number}`;
+export const courseNumbers = (courses = {}, group) => Object.keys(courses).filter(k => k.startsWith(`${group}-`)).map(k => Number(k.slice(group.length + 1))).filter(Number.isInteger).sort((a,b)=>a-b);
 const groupOf = (key) =>
 	COURSE_GROUPS.find((g) => g.key === key) || COURSE_GROUPS[0];
 const hasLaps = (group) => group === "speed"; // only Speed driving courses have a Lap 1 and a Lap 2 path
+
+// The label of a slot in the Course builder: the number a saved course has now, or "New course" for a slot that is not saved yet.
+function slotLabel(state, n) {
+	const key = courseKey(state.courseGroup, n);
+	return state.data.courses[key] ? `Course ${courseDisplayNumber(state.data.courses, key)}` : "New course";
+}
+const builderTitle = (state) => slotLabel(state, state.courseNumber);
+// ---------------------------------------------------------------- course numbering
+// A course is stored under a permanent KEY ("speed-3": its original slot number). What people SEE is its position among the courses that
+// exist now, so when a course is deleted the later ones close the gap (the old Course 3 is shown as Course 2). Because the key never
+// changes, every attempt recorded on a course stays attached to the right course. A course that no longer exists is shown as deleted
+// together with the number it originally had, so it can never be mistaken for a current course.
+const keyParts = (key) => {
+	const [group, number] = String(key || "").split("-");
+	return { group, number: /^\d+$/.test(number || "") ? Number(number) : null };
+};
+export function courseDisplayNumber(courses = {}, key) {
+	const { group, number } = keyParts(key);
+	if (number === null) return null;
+	const live = courseNumbers(courses, group).filter((n) => courses[courseKey(group, n)]);
+	const at = live.indexOf(number);
+	return at < 0 ? null : at + 1;
+}
+// The saved name, with a default-style name ("Speed driving Course 3") updated to the number the course has now. A name the administrator
+// chose ("Cone weave") is left alone.
+export function courseName(courses = {}, key) {
+	const course = courses[key];
+	if (!course) return "";
+	const { group, number } = keyParts(key);
+	const display = courseDisplayNumber(courses, key);
+	const name = course.name || `${groupOf(group).label} Course ${number}`;
+	return display ? name.replace(/(\bCourse\s+)\d+\s*$/i, `$1${display}`) : name;
+}
+// The slot number for a NEW course: one above every slot ever used, including slots of deleted courses that still have attempts, so a
+// new course can never take over a deleted course's old attempts.
+export function nextSlotNumber(state, group) {
+	const used = new Set(courseNumbers(state.data.courses, group));
+	for (const x of state.data.submissions || []) {
+		const k = keyParts(x.data?.course);
+		if (k.group === group && k.number !== null) used.add(k.number);
+	}
+	return Math.max(0, ...used) + 1;
+}
 
 // ---------------------------------------------------------------- course choices (shared by the forms, Analysis, and Scoring settings)
 // The courses that exist for one course family, in slot order: [{ key: "speed-1", number: 1, name: "Cone weave" }, ...].
 // A course "exists" once it has been saved in the Course builder (it then appears on the Courses page).
 export function publishedCourses(courses = {}, group) {
-	return [1, 2, 3]
+	return courseNumbers(courses, group)
 		.map((number) => ({ key: courseKey(group, number), number }))
 		.filter((c) => courses[c.key])
-		.map((c) => ({ ...c, name: courses[c.key].name || `${groupOf(group).label} Course ${c.number}` }));
+		.map((c) => ({ ...c, display: courseDisplayNumber(courses, c.key), name: courseName(courses, c.key) }));
 }
 // Display name for a saved course answer ("speed-2"). A course that has since been deleted is still named, so old attempts stay readable.
 export function courseLabel(courses = {}, key) {
 	if (!key) return "";
-	const [group, number] = String(key).split("-");
-	const course = courses[key];
-	if (course) return course.name || `Course ${number}`;
-	return COURSE_GROUPS.some((g) => g.key === group) && /^[1-3]$/.test(number) ? `Course ${number} (deleted)` : String(key);
+	const { group, number } = keyParts(key);
+	if (courses[key]) {
+		const display = courseDisplayNumber(courses, key);
+		const name = courseName(courses, key);
+		const titled = /\bCourse\s+\d+/i.test(name) ? name : `Course ${display}: ${name}`;
+		// "Course 2 (originally Course 3)": the number shown differs from the course's original slot number.
+		return display !== null && display !== number ? `${titled} (originally Course ${number})` : titled;
+	}
+	return COURSE_GROUPS.some((g) => g.key === group) && number !== null ? `Deleted course (originally Course ${number})` : String(key);
 }
+// True when an attempt's course no longer exists (for marking it in the Analysis tables).
+export const courseIsDeleted = (courses = {}, key) => Boolean(key) && !courses[key];
 
 // One colour per feature, used by the pictures AND the key so they always match.
 // (Walls and the background are also recoloured by CSS in dark mode through the course-wall-fill / course-bg-fill classes.)
@@ -55,6 +112,9 @@ export const COLORS = {
 	lap1: "#1d6fe0",
 	lap2: "#e8710a",
 	background: "#eaf1f4",
+	gate: "#c98a00",
+	restricted: "#d63a3a",
+	defense: "#7a4fd1",
 };
 
 // ---------------------------------------------------------------- saved data <-> in-memory model
@@ -108,6 +168,32 @@ const wallCount = (grid) => grid.reduce((a, b) => a + b, 0);
 
 const parseCell = (v) =>
 	v && inBounds(v.col, v.row) ? { col: v.col, row: v.row } : null;
+const parseXY = (s) => {
+	const [c, r] = String(s || "").split(",").map(Number);
+	return inBounds(c, r) ? [c, r] : null;
+};
+// Territory Breakthrough features of a saved course (empty for every other course).
+function territoryModel(course) {
+	const gates = [];
+	for (const g of Array.isArray(course?.gates) ? course.gates : []) {
+		const a = parseXY(g?.a),
+			b = parseXY(g?.b);
+		if (a && b && [1, 2, 3].includes(Number(g.n)) && !gates.some((x) => x.n === Number(g.n))) gates.push({ n: Number(g.n), a, b, dir: Number(g.dir) === -1 ? -1 : 1 });
+	}
+	const dpos = {};
+	for (const n of [1, 2, 3]) {
+		const cell = parseCell(course?.dpos?.[n]);
+		if (cell) dpos[n] = cell;
+	}
+	const restricted = emptyGrid();
+	if (Array.isArray(course?.restricted))
+		course.restricted.forEach((line, r) =>
+			String(line).split("").forEach((ch, c) => {
+				if (inBounds(c, r) && ch === "1") restricted[r * COURSE_COLS + c] = 1;
+			}),
+		);
+	return { gates: gates.sort((x, y) => x.n - y.n), dstart: parseCell(course?.dstart), dpos, restricted };
+}
 const parsePoints = (list) =>
 	(Array.isArray(list) ? list : [])
 		.map((s) => String(s).split(",").map(Number))
@@ -118,6 +204,7 @@ const parsePoints = (list) =>
 export function courseModel(course) {
 	return {
 		grid: gridFromCourse(course),
+		...territoryModel(course),
 		start: parseCell(course?.start),
 		end: parseCell(course?.end),
 		paths: [1, 2].map((lap) => ({
@@ -144,6 +231,15 @@ function modelToSaved(model, name) {
 			points: p.points.map(([c, r]) => `${c},${r}`),
 		})),
 		updatedAt: new Date().toISOString(),
+		robots: model.robots?.length ? [...model.robots] : ["REBUILT Robot", "REEFSCAPE Robot", "Swerve Chassis"],
+		...(model.territory
+			? {
+					gates: model.gates.map((g) => ({ n: g.n, a: `${g.a[0]},${g.a[1]}`, b: `${g.b[0]},${g.b[1]}`, dir: g.dir })),
+					dstart: model.dstart ? { ...model.dstart } : null,
+					dpos: Object.fromEntries(Object.entries(model.dpos).map(([n, cell]) => [n, { ...cell }])),
+					restricted: gridToRows(model.restricted),
+				}
+			: {}),
 	};
 }
 
@@ -241,7 +337,51 @@ export function overlayInner(model, group) {
 	const start = model.start
 		? `<circle cx="${model.start.col + 0.5}" cy="${model.start.row + 0.5}" r="${same ? 0.55 : 0.95}" fill="${COLORS.start}" stroke="#fff" stroke-width="${same ? 0.14 : 0.22}"/>`
 		: "";
-	return paths + badges + end + start;
+	return territoryOverlay(model, group) + paths + badges + end + start;
+}
+// The Territory Breakthrough layer: no-go cells for the defender, the checkpoint lines with their crossing direction, the defender's
+// starting area, and the D1-D3 positioning areas.
+const gateCells = (g) => {
+	const vertical = g.a[0] === g.b[0];
+	const lo = vertical ? Math.min(g.a[1], g.b[1]) : Math.min(g.a[0], g.b[0]),
+		hi = vertical ? Math.max(g.a[1], g.b[1]) : Math.max(g.a[0], g.b[0]);
+	return { vertical, lo, hi };
+};
+export function gateGeometry(g) {
+	const { vertical, lo, hi } = gateCells(g);
+	// Line from (x1,y1) to (x2,y2) in cell units, its middle, and the unit vector pointing the way the robot must cross.
+	return vertical
+		? { x1: g.a[0] + 0.5, y1: lo, x2: g.a[0] + 0.5, y2: hi + 1, mx: g.a[0] + 0.5, my: (lo + hi + 1) / 2, ux: g.dir, uy: 0 }
+		: { x1: lo, y1: g.a[1] + 0.5, x2: hi + 1, y2: g.a[1] + 0.5, mx: (lo + hi + 1) / 2, my: g.a[1] + 0.5, ux: 0, uy: g.dir };
+}
+function territoryOverlay(model, group) {
+	if (group !== "defense") return "";
+	let out = "";
+	if (model.restricted?.some(Boolean)) {
+		let rects = "";
+		for (let r = 0; r < COURSE_ROWS; r++)
+			for (let c = 0; c < COURSE_COLS; c++) if (model.restricted[r * COURSE_COLS + c]) rects += `<rect x="${c}" y="${r}" width="1" height="1"/>`;
+		out += `<g fill="${COLORS.restricted}" fill-opacity=".28" stroke="${COLORS.restricted}" stroke-opacity=".5" stroke-width=".06">${rects}</g>`;
+	}
+	for (const [n, cell] of Object.entries(model.dpos || {}))
+		out += `<circle cx="${cell.col + 0.5}" cy="${cell.row + 0.5}" r="1.15" fill="${COLORS.defense}" fill-opacity=".18" stroke="${COLORS.defense}" stroke-width=".18" stroke-dasharray=".5 .35"/><text x="${cell.col + 0.5}" y="${cell.row + 0.54}" font-size="1.05" font-weight="700" font-family="Arial,sans-serif" text-anchor="middle" dominant-baseline="central" fill="${COLORS.defense}">D${n}</text>`;
+	if (model.dstart) {
+		const x = model.dstart.col + 0.5,
+			y = model.dstart.row + 0.5;
+		out += `<polygon points="${x},${y - 1.2} ${x + 1.2},${y} ${x},${y + 1.2} ${x - 1.2},${y}" fill="${COLORS.defense}" stroke="#fff" stroke-width=".18"/><text x="${x}" y="${y + 0.04}" font-size=".85" font-weight="700" font-family="Arial,sans-serif" text-anchor="middle" dominant-baseline="central" fill="#fff">DS</text>`;
+	}
+	for (const g of model.gates || []) {
+		const k = gateGeometry(g);
+		const nx = -k.uy,
+			ny = k.ux; // along the line
+		// arrowhead in the middle of the line, pointing in the crossing direction
+		const tip = [k.mx + k.ux * 1.5, k.my + k.uy * 1.5],
+			base = [k.mx + k.ux * 0.3, k.my + k.uy * 0.3];
+		out += `<line x1="${k.x1}" y1="${k.y1}" x2="${k.x2}" y2="${k.y2}" stroke="${COLORS.gate}" stroke-width=".42" stroke-linecap="butt"/>`;
+		out += `<polygon points="${tip.join(",")} ${base[0] + nx * 0.8},${base[1] + ny * 0.8} ${base[0] - nx * 0.8},${base[1] - ny * 0.8}" fill="${COLORS.gate}" stroke="#fff" stroke-width=".1"/>`;
+		out += `<circle cx="${k.mx - k.ux * 1.2 - nx * 0}" cy="${k.my - k.uy * 1.2}" r=".9" fill="${COLORS.gate}" stroke="#fff" stroke-width=".14"/><text x="${k.mx - k.ux * 1.2}" y="${k.my - k.uy * 1.2 + 0.04}" font-size="1" font-weight="700" font-family="Arial,sans-serif" text-anchor="middle" dominant-baseline="central" fill="#fff">G${g.n}</text>`;
+	}
+	return out;
 }
 
 // The whole course as a vector picture: walls, then markers and paths.
@@ -267,6 +407,22 @@ export function courseSvg(model, label = "Course layout", group = "speed") {
 const ARROW = (color, extra = "") =>
 	`<line x1="3" y1="11" x2="19" y2="11" stroke="${color}" stroke-width="${extra ? 2.6 : 4}" stroke-linecap="round"${extra}/><polygon points="27,11 17,5.5 17,16.5" fill="${color}"/>`;
 const KEY = {
+	gate: {
+		label: "Checkpoint G1 / G2 / G3 (cross in the arrow's direction, in order)",
+		icon: `<line x1="15" y1="2" x2="15" y2="20" stroke="${COLORS.gate}" stroke-width="3.4"/><polygon points="27,11 17,5.5 17,16.5" fill="${COLORS.gate}"/><circle cx="7" cy="11" r="5.5" fill="${COLORS.gate}"/><text x="7" y="11.5" font-size="7" font-weight="700" font-family="Arial,sans-serif" text-anchor="middle" dominant-baseline="central" fill="#fff">G</text>`,
+	},
+	restricted: {
+		label: "No-go area for the defensive robot",
+		icon: `<rect x="5" y="3" width="20" height="16" fill="${COLORS.restricted}" fill-opacity=".3" stroke="${COLORS.restricted}" stroke-opacity=".6" stroke-width="1.2"/>`,
+	},
+	dstart: {
+		label: "Defensive robot starting area",
+		icon: `<polygon points="15,1.5 26,11 15,20.5 4,11" fill="${COLORS.defense}" stroke="#fff" stroke-width="1.4"/>`,
+	},
+	dpos: {
+		label: "Defensive positioning area D1 / D2 / D3 (coaching only)",
+		icon: `<circle cx="15" cy="11" r="8.5" fill="${COLORS.defense}" fill-opacity=".18" stroke="${COLORS.defense}" stroke-width="1.6" stroke-dasharray="3 2"/>`,
+	},
 	wall: {
 		label: "Wall",
 		icon: `<rect class="course-wall-fill" x="8" y="3" width="16" height="16" rx="1.5" fill="${COLORS.wall}"/>`,
@@ -294,6 +450,8 @@ const KEY = {
 		icon: `<line x1="3" y1="11" x2="13" y2="11" stroke="${COLORS.lap1}" stroke-width="2.6" stroke-linecap="round"/><line x1="15" y1="2" x2="15" y2="20" stroke="${COLORS.lap1}" stroke-width="3.2"/><line x1="17" y1="11" x2="27" y2="11" stroke="${COLORS.lap2}" stroke-width="2.6" stroke-linecap="round" stroke-dasharray="4 3"/>`,
 	},
 };
+// On Defensive + Offensive courses the generic start and end markers have specific meanings.
+const TERRITORY_KEY_LABELS = { start: "Offensive robot starting zone", end: "Finishing zone", path: "Suggested route (follow the arrows)" };
 // Which features does this course use? Order: walls, start, end, then the path(s) and lap markers.
 export function courseFeatures(model, group) {
 	const features = [],
@@ -301,6 +459,12 @@ export function courseFeatures(model, group) {
 	if (wallCount(model.grid)) features.push("wall");
 	if (model.start) features.push("start");
 	if (model.end) features.push("end");
+	if (group === "defense") {
+		if (model.gates?.length) features.push("gate");
+		if (model.restricted?.some(Boolean)) features.push("restricted");
+		if (model.dstart) features.push("dstart");
+		if (Object.keys(model.dpos || {}).length) features.push("dpos");
+	}
 	if (hasLaps(group)) {
 		used.forEach((p) => features.push(`lap${p.lap}`));
 		if (used.length) features.push("lapstart", "lapend");
@@ -310,7 +474,7 @@ export function courseFeatures(model, group) {
 export function courseKeyHtml(model, group, { compact = false } = {}) {
 	const features = courseFeatures(model, group);
 	if (!features.length) return "";
-	return `<ul class="course-key${compact ? " compact" : ""}" aria-label="Key">${features.map((f) => `<li data-key="${f}"><svg class="key-icon" viewBox="0 0 30 22" width="30" height="22" aria-hidden="true">${KEY[f].icon}</svg><span>${KEY[f].label}</span></li>`).join("")}</ul>`;
+	return `<ul class="course-key${compact ? " compact" : ""}" aria-label="Key">${features.map((f) => `<li data-key="${f}"><svg class="key-icon" viewBox="0 0 30 22" width="30" height="22" aria-hidden="true">${KEY[f].icon}</svg><span>${esc(group === "defense" && TERRITORY_KEY_LABELS[f] ? TERRITORY_KEY_LABELS[f] : KEY[f].label)}</span></li>`).join("")}</ul>`;
 }
 
 // ---------------------------------------------------------------- Courses page (everyone can view; administrators also get Edit / Delete)
@@ -318,19 +482,22 @@ export function renderCourseGallery(ctx) {
 	const { state } = ctx,
 		admin = state.session.isAdmin;
 	const groups = COURSE_GROUPS.map((g) => {
-		const slots = [1, 2, 3]
+		const nums = [...courseNumbers(state.data.courses, g.key), nextSlotNumber(state, g.key)];
+		const slots = nums
 			.map((n) => {
 				const key = courseKey(g.key, n),
 					course = state.data.courses[key],
 					model = course ? courseModel(course) : null;
-				const name = course?.name || `${g.label} Course ${n}`;
+				const name = course ? courseName(state.data.courses, key) : `${g.label} Course ${n}`;
+				const shown = course ? `Course ${courseDisplayNumber(state.data.courses, key)}` : "New course";
 				const picture = course
 					? `<button class="course-thumb" data-view-course="${key}" aria-label="View ${esc(name)} larger">${courseSvg(model, name, g.key)}</button>${courseKeyHtml(model, g.key, { compact: true })}`
 					: `<div class="course-thumb empty"><span>Not published yet</span></div>`;
 				const actions = admin
 					? `<div class="course-actions"><button class="button button-secondary button-small" data-edit-course="${key}">${course ? "Edit" : "Create"}</button>${course ? `<button class="button button-danger button-small" data-delete-course="${key}">Delete</button>` : ""}</div>`
 					: "";
-				return `<article class="course-card"><div class="course-card-head"><strong>Course ${n}</strong><span>${course ? esc(name) : "&nbsp;"}</span></div>${picture}${actions}</article>`;
+				const allowed = course ? (course.robots?.length ? course.robots : ["REBUILT Robot", "REEFSCAPE Robot", "Swerve Chassis"]) : [];
+				return `<article class="course-card"><div class="course-card-head"><strong>${shown}</strong><span>${course ? esc(name) : "&nbsp;"}</span></div>${course ? `<small class="help">Robots: ${allowed.map(esc).join(", ")}</small>` : ""}${picture}${actions}</article>`;
 			})
 			.join("");
 		return `<section class="panel course-group"><div class="panel-heading"><div><h3>${esc(g.label)}</h3><p>${esc(g.note)}. Use the same layout for every driver in this drill on a given practice day.</p></div></div><div class="course-cards">${slots}</div></section>`;
@@ -409,13 +576,17 @@ function confirmDeleteCourse(ctx, key) {
 // The draft being edited lives in state.courseDraft so it survives while the page re-renders:
 //   { key, name, grid, start, end, paths, lap (which lap's path is being drawn), sig (the drawing as last saved), baseName (the name as last saved
 //     or defaulted), savedName (null until this course has been saved), undo: [earlier states] }
-const TOOLS = ["draw", "erase", "start", "end", "path"];
+const BASE_TOOLS = ["draw", "erase", "start", "end", "path"];
+// Defensive + Offensive (Territory Breakthrough) courses have four more tools: checkpoints, the defender's start, D1-D3, and no-go cells.
+const toolsFor = (group) => (group === "defense" ? [...BASE_TOOLS, "gate", "dstart", "dpos", "restricted"] : BASE_TOOLS);
 const signature = (d) =>
 	JSON.stringify({
 		g: d.grid.join(""),
 		s: d.start,
 		e: d.end,
 		p: d.paths.map((p) => (p.points.length >= 2 ? p.points : [])),
+		r: [...(d.robots || [])].sort(),
+		t: [d.gates || [], d.dstart || null, d.dpos || {}, (d.restricted || []).join("")],
 	});
 function ensureDraft(ctx) {
 	const { state } = ctx,
@@ -423,12 +594,11 @@ function ensureDraft(ctx) {
 	if (state.courseDraft?.key === key) return state.courseDraft;
 	const course = state.data.courses[key],
 		model = courseModel(course);
-	const name =
-		course?.name ||
-		`${groupOf(state.courseGroup).label} Course ${state.courseNumber}`;
+	const name = course ? courseName(state.data.courses, key) : `${groupOf(state.courseGroup).label} Course ${courseDisplayNumber({ ...state.data.courses, [key]: {} }, key)}`;
 	const d = {
 		key,
 		name,
+		robots: course?.robots?.length ? [...course.robots] : ["REBUILT Robot", "REEFSCAPE Robot", "Swerve Chassis"],
 		...model,
 		lap: 1,
 		undo: [],
@@ -453,6 +623,10 @@ const snapshotOf = (d) =>
 			start: d.start,
 			end: d.end,
 			paths: d.paths,
+			gates: d.gates || [],
+			dstart: d.dstart || null,
+			dpos: d.dpos || {},
+			restricted: d.restricted || [],
 		}),
 	);
 
@@ -499,13 +673,35 @@ const TOOL_INFO = {
 		"End position",
 		"Click a cell to place the red end square. Click another cell to move it.",
 	],
+	gate: [
+		"Checkpoints G1-G3",
+		"Pick G1, G2 or G3, then drag a straight line across the opening the robot must pass through (a plain click makes a short up-down line). The arrow shows the direction it must be crossed. Use Flip direction to reverse it.",
+	],
+	dstart: [
+		"Defensive start",
+		"Click a cell to place the defensive robot's starting area, in the middle of the field. Click another cell to move it.",
+	],
+	dpos: [
+		"Defensive areas D1-D3",
+		"Pick D1, D2 or D3, then click a cell to place that positioning area. They are for coaching analysis only: no points for visiting them.",
+	],
+	restricted: [
+		"No-go area",
+		"Click and drag to mark cells the defensive robot may not enter (the offensive start zone and the buffer around the finish). Hold Shift to erase.",
+	],
 	path: [
 		"Robot path",
 		"Click to add path points, or drag to trace the route freehand. Arrows show the direction drivers follow.",
 	],
 };
+// On Defensive + Offensive courses the start and end markers are the offensive start zone and the finish zone.
+const toolLabel = (tool, group) => (group === "defense" ? { start: "Offensive start zone", end: "Finish zone", path: "Suggested route" }[tool] : null) || TOOL_INFO[tool][0];
 const toolIcon = (tool) =>
 	({
+		gate: `<svg viewBox="0 0 22 22" width="20" height="20"><line x1="8" y1="2" x2="8" y2="20" stroke="${COLORS.gate}" stroke-width="3"/><polygon points="20,11 11,6 11,16" fill="${COLORS.gate}"/></svg>`,
+		dstart: `<svg viewBox="0 0 22 22" width="20" height="20"><polygon points="11,2 20,11 11,20 2,11" fill="${COLORS.defense}"/></svg>`,
+		dpos: `<svg viewBox="0 0 22 22" width="20" height="20"><circle cx="11" cy="11" r="7.5" fill="${COLORS.defense}" fill-opacity=".2" stroke="${COLORS.defense}" stroke-width="2" stroke-dasharray="3 2"/></svg>`,
+		restricted: `<svg viewBox="0 0 22 22" width="20" height="20"><rect x="3" y="3" width="16" height="16" fill="${COLORS.restricted}" fill-opacity=".3" stroke="${COLORS.restricted}" stroke-width="2"/></svg>`,
 		draw: `<svg viewBox="0 0 22 22" width="20" height="20"><rect class="course-wall-fill" x="3" y="3" width="16" height="16" rx="2" fill="${COLORS.wall}"/></svg>`,
 		erase: `<svg viewBox="0 0 22 22" width="20" height="20"><rect x="3" y="3" width="16" height="16" rx="2" fill="#fff" stroke="#8aa0ad" stroke-width="2" stroke-dasharray="3 2"/></svg>`,
 		start: `<svg viewBox="0 0 22 22" width="20" height="20"><circle cx="11" cy="11" r="8" fill="${COLORS.start}"/></svg>`,
@@ -517,7 +713,7 @@ export function renderCourseBuilder(ctx) {
 	const { state } = ctx,
 		d = ensureDraft(ctx),
 		group = groupOf(state.courseGroup);
-	if (!TOOLS.includes(state.courseTool)) state.courseTool = "draw";
+	if (!toolsFor(state.courseGroup).includes(state.courseTool)) state.courseTool = "draw";
 	const cells = d.grid
 		.map((v) => `<div class="cell${v ? " on" : ""}"></div>`)
 		.join("");
@@ -525,21 +721,22 @@ export function renderCourseBuilder(ctx) {
 		(g) =>
 			`<button class="facet-card ${state.courseGroup === g.key ? "selected" : ""}" data-cgroup="${g.key}"><span class="tag">COURSE</span><strong>${esc(g.label)}</strong><span>${esc(g.note)}</span></button>`,
 	).join("");
-	const tools = TOOLS.map(
+	const tools = toolsFor(state.courseGroup).map(
 		(t) =>
-			`<button type="button" data-tool="${t}" class="${state.courseTool === t ? "active" : ""}">${toolIcon(t)}<span>${TOOL_INFO[t][0]}</span></button>`,
+			`<button type="button" data-tool="${t}" class="${state.courseTool === t ? "active" : ""}">${toolIcon(t)}<span>${esc(toolLabel(t, state.courseGroup))}</span></button>`,
 	).join("");
-	return `${ctx.pageHeader("Course builder", "Draw walls, place the start and end, and trace the robot path. Saved layouts appear on the Courses page for everyone.", `<button class="button button-secondary" id="go-courses">View Courses page</button>`)}<div class="facet-grid facet-grid-3">${cards}</div>
-  <div class="builder-layout"><aside class="panel toolbox"><h3>Course ${state.courseNumber}</h3>
+	return `${ctx.pageHeader("Course builder", "Draw walls, place the start and end, and trace the robot path. Defensive + Offensive courses also take the checkpoints G1-G3, the defender's start, the D1-D3 areas, and no-go cells. Saved layouts appear on the Courses page for everyone.", `<button class="button button-secondary" id="go-courses">View Courses page</button>`)}<div class="facet-grid facet-grid-3">${cards}</div>
+  <div class="builder-layout"><aside class="panel toolbox"><h3>${builderTitle(state)}</h3>
     <div class="tool-list" role="group" aria-label="Drawing tool">${tools}</div>
     <p class="help" id="tool-help"></p>
     <div id="tool-options"></div>
     <div class="toolbox-row"><button type="button" class="button button-secondary button-small" id="course-undo">Undo</button><button type="button" class="button button-secondary button-small" id="course-clear">Clear walls</button></div>
-    <hr><label class="field"><span>Layout number</span><select id="course-number">${[1, 2, 3].map((n) => `<option value="${n}" ${n === state.courseNumber ? "selected" : ""}>Course ${n}</option>`).join("")}</select></label>
+    <hr><label class="field"><span>Layout number</span><select id="course-number">${[...new Set([...courseNumbers(state.data.courses, state.courseGroup), state.courseNumber, nextSlotNumber(state, state.courseGroup)])].sort((a,b)=>a-b).map((n) => `<option value="${n}" ${n === state.courseNumber ? "selected" : ""}>${slotLabel(state, n)}</option>`).join("")}</select></label>
     <label class="field"><span>Layout name</span><input id="course-name" value="${esc(d.name)}"></label>
+    <fieldset class="field"><legend>Robots allowed on this course</legend><div class="checkboxes">${["REBUILT Robot", "REEFSCAPE Robot", "Swerve Chassis"].map(r => `<label><input type="checkbox" data-course-robot value="${r}" ${d.robots.includes(r) ? "checked" : ""}> ${r}</label>`).join("")}</div><small class="help">Choose every robot that may drive this layout.</small></fieldset>
     <button class="button" id="save-course" style="margin-top:13px">Save layout</button>
     <p class="help" id="course-status" style="margin-top:10px"></p>
-  </aside><section class="panel canvas-panel"><div class="panel-heading" style="padding:0 0 13px"><div><h3>${esc(group.label)} - Course ${state.courseNumber}</h3><p>Keep the same selected course for all drivers in this drill on a day.${d.converted ? " This layout was converted from the old piece-based builder; please review it before saving." : ""}</p></div></div>
+  </aside><section class="panel canvas-panel"><div class="panel-heading" style="padding:0 0 13px"><div><h3>${esc(group.label)} - ${builderTitle(state)}</h3><p>Keep the same selected course for all drivers in this drill on a day.${d.converted ? " This layout was converted from the old piece-based builder; please review it before saving." : ""}</p></div></div>
     <div class="course-wrap"><div class="course-grid" id="course-grid" style="grid-template-columns:repeat(${COURSE_COLS},1fr)" aria-label="Course grid. Use the selected tool to draw on it.">${cells}</div><svg class="course-overlay" id="course-overlay" viewBox="0 0 ${COURSE_COLS} ${COURSE_ROWS}" preserveAspectRatio="none" aria-hidden="true"></svg></div>
     <div class="key-panel"><strong>Key</strong><span class="help"> Lists only what this course uses, and is shown to everyone who views the course.</span><div id="course-key"></div></div></section></div>`;
 }
@@ -570,6 +767,11 @@ export function bindCourseBuilder(ctx) {
 		const parts = [`${wallCount(d.grid)} wall cells`];
 		if (d.start) parts.push("start set");
 		if (d.end) parts.push("end set");
+		if (state.courseGroup === "defense") {
+			parts.push(`${d.gates.length}/3 checkpoints`);
+			if (d.dstart) parts.push("defender start set");
+			if (Object.keys(d.dpos).length) parts.push(`${Object.keys(d.dpos).length} defensive area${Object.keys(d.dpos).length === 1 ? "" : "s"}`);
+		}
 		const used = usablePaths(d).length;
 		if (used)
 			parts.push(
@@ -624,6 +826,18 @@ export function bindCourseBuilder(ctx) {
 			options.innerHTML = `<button type="button" class="button button-secondary button-small" id="remove-start" ${d.start ? "" : "disabled"}>Remove start</button>`;
 		else if (tool === "end")
 			options.innerHTML = `<button type="button" class="button button-secondary button-small" id="remove-end" ${d.end ? "" : "disabled"}>Remove end</button>`;
+		else if (tool === "gate") {
+			d.gateN ??= 1;
+			const placed = (n) => d.gates.some((g) => g.n === n);
+			options.innerHTML = `<div class="seg" role="group" aria-label="Which checkpoint">${[1, 2, 3].map((n) => `<button type="button" data-gate-n="${n}" class="${d.gateN === n ? "active" : ""}">G${n}${placed(n) ? " &#10003;" : ""}</button>`).join("")}</div>
+        <div class="toolbox-row" style="margin-top:8px"><button type="button" class="button button-secondary button-small" id="flip-gate" ${placed(d.gateN) ? "" : "disabled"}>Flip direction</button><button type="button" class="button button-secondary button-small" id="remove-gate" ${placed(d.gateN) ? "" : "disabled"}>Remove G${d.gateN}</button></div>
+        <p class="help">Crossing order is G1, then G2, then G3, then the finish zone.</p>`;
+		} else if (tool === "dpos") {
+			d.dposN ??= 1;
+			options.innerHTML = `<div class="seg" role="group" aria-label="Which defensive area">${[1, 2, 3].map((n) => `<button type="button" data-dpos-n="${n}" class="${d.dposN === n ? "active" : ""}">D${n}${d.dpos[n] ? " &#10003;" : ""}</button>`).join("")}</div>
+        <button type="button" class="button button-secondary button-small" id="remove-dpos" style="margin-top:8px" ${d.dpos[d.dposN] ? "" : "disabled"}>Remove D${d.dposN}</button>`;
+		} else if (tool === "dstart") options.innerHTML = `<button type="button" class="button button-secondary button-small" id="remove-dstart" ${d.dstart ? "" : "disabled"}>Remove defensive start</button>`;
+		else if (tool === "restricted") options.innerHTML = `<button type="button" class="button button-secondary button-small" id="clear-restricted" ${d.restricted.some(Boolean) ? "" : "disabled"}>Clear no-go area</button>`;
 		else if (tool === "path") {
 			options.innerHTML = `${
 				laps
@@ -633,6 +847,39 @@ export function bindCourseBuilder(ctx) {
 			}
         <button type="button" class="button button-secondary button-small" id="clear-path" ${activePath().points.length ? "" : "disabled"}>Clear ${laps ? `Lap ${d.lap} path` : "path"}</button>`;
 		} else options.innerHTML = "";
+		options.querySelectorAll("[data-gate-n]").forEach((b) => (b.onclick = () => { d.gateN = Number(b.dataset.gateN); renderOptions(); }));
+		options.querySelectorAll("[data-dpos-n]").forEach((b) => (b.onclick = () => { d.dposN = Number(b.dataset.dposN); renderOptions(); }));
+		options.querySelector("#flip-gate")?.addEventListener("click", () => {
+			const g = d.gates.find((x) => x.n === d.gateN);
+			if (!g) return;
+			pushUndo(snapshotOf(d));
+			g.dir = -g.dir;
+			refreshAll();
+		});
+		options.querySelector("#remove-gate")?.addEventListener("click", () => {
+			pushUndo(snapshotOf(d));
+			d.gates = d.gates.filter((x) => x.n !== d.gateN);
+			refreshAll();
+			renderOptions();
+		});
+		options.querySelector("#remove-dpos")?.addEventListener("click", () => {
+			pushUndo(snapshotOf(d));
+			delete d.dpos[d.dposN];
+			refreshAll();
+			renderOptions();
+		});
+		options.querySelector("#remove-dstart")?.addEventListener("click", () => {
+			pushUndo(snapshotOf(d));
+			d.dstart = null;
+			refreshAll();
+			renderOptions();
+		});
+		options.querySelector("#clear-restricted")?.addEventListener("click", () => {
+			pushUndo(snapshotOf(d));
+			d.restricted = d.restricted.map(() => 0);
+			refreshAll();
+			renderOptions();
+		});
 		options.querySelector("#remove-start")?.addEventListener("click", () => {
 			pushUndo(snapshotOf(d));
 			d.start = null;
@@ -692,6 +939,10 @@ export function bindCourseBuilder(ctx) {
 		d.name = e.target.value;
 		updateStatus();
 	};
+	document.querySelectorAll("[data-course-robot]").forEach(b => b.onchange = () => {
+		d.robots = [...document.querySelectorAll("[data-course-robot]:checked")].map(x => x.value);
+		updateStatus();
+	});
 
 	// ---- pointer drawing: press on the grid, then drag. What happens depends on the selected tool.
 	let active = false,
@@ -743,6 +994,27 @@ export function bindCourseBuilder(ctx) {
 		return out;
 	};
 	const isWall = (p) => d.grid[p.row * COURSE_COLS + p.col] === 1;
+	// Checkpoints: a straight line of cells. Dragging snaps to the dominant direction; a click without a drag makes a short up-down line.
+	// The default crossing direction points from the start zone toward the finish zone (when both are placed).
+	let gateFrom = null;
+	const defaultDir = (vertical) => {
+		const diff = d.start && d.end ? (vertical ? d.end.col - d.start.col : d.end.row - d.start.row) : 0;
+		return diff < 0 ? -1 : 1;
+	};
+	const setGate = (from, to) => {
+		const n = d.gateN ?? 1;
+		let a = { ...from },
+			b = { ...to };
+		if (a.col === b.col && a.row === b.row) {
+			a = { col: from.col, row: Math.max(0, from.row - 2) };
+			b = { col: from.col, row: Math.min(COURSE_ROWS - 1, from.row + 2) };
+		} else if (Math.abs(b.col - a.col) >= Math.abs(b.row - a.row)) b.row = a.row;
+		else b.col = a.col;
+		const vertical = a.col === b.col;
+		const old = d.gates.find((g) => g.n === n);
+		const keep = old && (old.a[0] === old.b[0]) === vertical ? old.dir : defaultDir(vertical);
+		d.gates = [...d.gates.filter((g) => g.n !== n), { n, a: [a.col, a.row], b: [b.col, b.row], dir: keep }].sort((x, y) => x.n - y.n);
+	};
 	// Painting a wall over the start or end marker (or erasing it) removes that marker, so a marker never sits inside a wall.
 	const clearMarkersAt = (c, r) => {
 		if (d.start && d.start.col === c && d.start.row === r) d.start = null;
@@ -751,7 +1023,7 @@ export function bindCourseBuilder(ctx) {
 	const place = (kind, p, announce) => {
 		// start / end marker
 		if (isWall(p)) {
-			if (announce) ctx.toast(`Choose an empty cell for the ${kind} position.`);
+			if (announce) ctx.toast(`Choose an empty cell for the ${kind === "dstart" ? "defensive start" : kind} position.`);
 			return;
 		}
 		d[kind] = { col: p.col, row: p.row };
@@ -770,8 +1042,17 @@ export function bindCourseBuilder(ctx) {
 			value = tool === "erase" ? 0 : 1;
 			setCell(last.col, last.row, value);
 			clearMarkersAt(last.col, last.row);
-		} else if (tool === "start" || tool === "end") place(tool, last, true);
-		else if (tool === "path") {
+		} else if (tool === "start" || tool === "end" || tool === "dstart") place(tool, last, true);
+		else if (tool === "dpos") {
+			if (isWall(last)) ctx.toast("Choose an empty cell for the defensive area.");
+			else d.dpos[d.dposN ?? 1] = { col: last.col, row: last.row };
+		} else if (tool === "restricted") {
+			value = e.shiftKey ? 0 : 1;
+			d.restricted[last.row * COURSE_COLS + last.col] = value;
+		} else if (tool === "gate") {
+			gateFrom = last;
+			setGate(last, last);
+		} else if (tool === "path") {
 			// a click adds a waypoint; dragging continues the stroke
 			const path = activePath();
 			strokeStart = path.points.length;
@@ -791,7 +1072,11 @@ export function bindCourseBuilder(ctx) {
 				setCell(c, r, value);
 				clearMarkersAt(c, r);
 			});
-		} else if (tool === "start" || tool === "end") place(tool, p, false);
+		} else if (tool === "start" || tool === "end" || tool === "dstart") place(tool, p, false);
+		else if (tool === "dpos") {
+			if (!isWall(p)) d.dpos[d.dposN ?? 1] = { col: p.col, row: p.row };
+		} else if (tool === "restricted") lineCells(last, p).forEach(([c, r]) => (d.restricted[r * COURSE_COLS + c] = value));
+		else if (tool === "gate") setGate(gateFrom, p);
 		else if (tool === "path") {
 			const path = activePath();
 			lineCells(last, p)
@@ -830,8 +1115,10 @@ export function bindCourseBuilder(ctx) {
 		const name =
 			d.name.trim() ||
 			`${groupOf(state.courseGroup).label} Course ${state.courseNumber}`;
+		d.robots = [...document.querySelectorAll("[data-course-robot]:checked")].map(x => x.value);
+		if (!d.robots.length) { ctx.toast("Select at least one robot for this course."); return; }
 		const item = modelToSaved(
-			{ ...d, paths: laps ? d.paths : d.paths.filter((p) => p.lap === 1) },
+			{ ...d, territory: state.courseGroup === "defense", paths: laps ? d.paths : d.paths.filter((p) => p.lap === 1) },
 			name,
 		);
 		try {

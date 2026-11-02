@@ -22,7 +22,7 @@ import { drillForm, drillFormHtml, drillFormId, isDrillForm } from "./drillforms
 
 // Built-in drill forms (drillforms.js) are edited here too. Their original questions are `locked`: they can be reworded, described,
 // given a hint, and moved, but not deleted or given another type, because the score, the timer, and Analysis read them.
-const DRILLS = Object.keys(FACETS);
+const DRILLS = Object.keys(FACETS).filter((k) => !FACETS[k].territory); // offense / defense forms are edited in the Territory Breakthrough panel (territoryanalysis.js)
 const LOCKED_TYPE_NAMES = { text: "Short answer", number: "Number", date: "Date", select: "Grade dropdown", robot: "Robot dropdown", course: "Course dropdown", checkbox: "Tick boxes", paragraph: "Long answer" };
 const hasLocked = (section) => section.questions.some((q) => q.field);
 

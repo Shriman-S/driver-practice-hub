@@ -10,6 +10,8 @@
 //
 // The functions below stay pure: no DOM or database calls, which keeps the formulas auditable and easy to test.
 
+import { TERRITORY_DEFAULTS, territorySettings, validateTerritory, territoryScore, isTerritory } from "./territorycore.js";
+
 const clamp = (value, low = 0, high = 10) => Math.max(low, Math.min(high, value));
 const round = (value) => Math.round(value * 100) / 100;
 // A missing or unreadable answer counts as 0, so one blank box can never turn a whole score into NaN.
@@ -42,16 +44,17 @@ export const COMPONENTS = {
 		{ key: "pace", kind: "pace", label: "Pace (lap consistency)", symbol: "P", inputs: ["lap1", "lap2"] },
 		{ key: "penalty", kind: "penalty", label: "Penalties", symbol: "N", input: "penalties" },
 	],
+	// Offensive and Defensive driving are scored by Territory Breakthrough (territorycore.js): their parts are measured events, not
+	// weighted components, so they have no benchmarks or weights to edit here. Their settings are cfg.territory.
 	defense: [
-		{ key: "scoring", kind: "range", label: "Scoring preventions", symbol: "C", input: "scorePreventions", variable: "preventions", unit: "", unitWord: "scoring preventions", inputLabel: "scoring preventions", per: "scoring prevention" },
-		{ key: "fuel", kind: "range", label: "Fuel preventions", symbol: "F", input: "fuelPreventions", variable: "fuel preventions", unit: "", unitWord: "fuel preventions", inputLabel: "fuel preventions", per: "fuel prevention" },
-		{ key: "wasted", kind: "range", label: "Time wasted", symbol: "W", input: "secondsWasted", variable: "seconds", unit: "s", unitWord: "seconds wasted", inputLabel: "seconds of the opponent's time wasted", per: "second wasted" },
+		{ key: "denied", kind: "territory", label: "Checkpoints denied", symbol: "G" },
+		{ key: "prevented", kind: "territory", label: "Finish prevented", symbol: "F" },
+		{ key: "delay", kind: "territory", label: "Delay of the run", symbol: "T" },
 	],
 	offense: [
-		{ key: "shot", kind: "range", label: "Volume (fuel shot)", symbol: "V", input: "fuelShot", variable: "shots", unit: "", unitWord: "shots", inputLabel: "fuel shot", per: "shot" },
-		{ key: "scored", kind: "range", label: "Fuel scored", symbol: "S", input: "fuelScored", variable: "scored", unit: "", unitWord: "scored fuel", inputLabel: "fuel scored", per: "scored fuel" },
-		{ key: "accuracy", kind: "accuracy", label: "Accuracy", symbol: "A", inputs: ["fuelScored", "fuelShot"] },
-		{ key: "evasion", kind: "range", label: "Evasions", symbol: "E", input: "evasions", variable: "evasions", unit: "", unitWord: "evasions", inputLabel: "successful evasions", per: "evasion" },
+		{ key: "gates", kind: "territory", label: "Checkpoints crossed", symbol: "G" },
+		{ key: "finish", kind: "territory", label: "Finish reached", symbol: "F" },
+		{ key: "bonus", kind: "territory", label: "Finish-time bonus", symbol: "B" },
 	],
 };
 // The overall ranking methods an administrator can choose from.
@@ -83,17 +86,9 @@ export const DEFAULT_SCORING = {
 			pace: { weight: 10, strictness: 1 },
 			penalty: { weight: 20, perPenalty: 2 },
 		},
-		defense: {
-			scoring: { weight: 35, zero: 0, full: 6, curve: "linear" },
-			fuel: { weight: 25, zero: 0, full: 4, curve: "linear" },
-			wasted: { weight: 40, zero: 0, full: 30, curve: "linear" },
-		},
-		offense: {
-			shot: { weight: 20, zero: 0, full: 30, curve: "linear" },
-			scored: { weight: 30, zero: 0, full: 20, curve: "linear" },
-			accuracy: { weight: 25, target: 100 },
-			evasion: { weight: 25, zero: 0, full: 5, curve: "linear" },
-		},
+		// Defense and offense are scored by Territory Breakthrough (cfg.territory below), so they have no component settings.
+		defense: {},
+		offense: {},
 	},
 	overall: {
 		method: "coverage",
@@ -104,14 +99,21 @@ export const DEFAULT_SCORING = {
 	},
 	// Per-course settings, same shape as facets[facet]. Empty means every course uses its drill's default settings.
 	byCourse: { speed: {}, defense: {}, offense: {} },
+	byRobot: { speed: {}, defense: {}, offense: {} },
+	// Territory Breakthrough (the Offensive / Defensive practice): heat length, points, start countdown, ranking assumptions.
+	territory: { ...TERRITORY_DEFAULTS },
 };
+// The drills scored by weighted components (Speed). Offense and defense use Territory Breakthrough instead.
+export const COMPONENT_FACETS = ["speed"];
+export const TERRITORY_FACETS = ["defense", "offense"];
 // Course ids look like "speed-1" ... "defense-3"; defense and offense both use the "defense-N" (paired drill) courses.
-export const COURSE_KEY = /^(speed|defense)-[1-3]$/;
+export const COURSE_KEY = /^(speed|defense)-\d+$/;
 // Weights this close together are treated as equal (so 33.34 / 33.33 / 33.33 is an equal split).
 export const weightsEqual = (values) => Math.max(...values) - Math.min(...values) <= 0.011;
 // The settings that score an attempt of `facet` driven on `courseKey`.
-export function settingsFor(config, facet, courseKey) {
-	return (courseKey && config.byCourse?.[facet]?.[courseKey]) || config.facets[facet];
+export function settingsFor(config, facet, courseKey, robot = "") {
+	const profile = robot === "Swerve Chassis" ? "swerve" : "mecanum";
+	return (courseKey && config.byRobot?.[facet]?.[courseKey]?.[profile]) || (courseKey && config.byCourse?.[facet]?.[courseKey]) || config.facets[facet];
 }
 const copy = (value) => JSON.parse(JSON.stringify(value));
 
@@ -135,11 +137,16 @@ function normalizeFacet(facet, from, base) {
 export function normalizeScoring(saved) {
 	const out = copy(DEFAULT_SCORING);
 	if (!saved || typeof saved !== "object") return out;
-	for (const facet of FACET_ORDER) out.facets[facet] = normalizeFacet(facet, saved.facets?.[facet], DEFAULT_SCORING.facets[facet]);
-	for (const facet of FACET_ORDER)
+	for (const facet of COMPONENT_FACETS) out.facets[facet] = normalizeFacet(facet, saved.facets?.[facet], DEFAULT_SCORING.facets[facet]);
+	out.territory = territorySettings(saved.territory);
+	for (const facet of COMPONENT_FACETS)
 		for (const [key, value] of Object.entries(saved.byCourse?.[facet] || {}))
 			if (COURSE_KEY.test(key) && value && typeof value === "object")
 				out.byCourse[facet][key] = normalizeFacet(facet, value, out.facets[facet]);
+	for (const facet of COMPONENT_FACETS) for (const [key, profiles] of Object.entries(saved.byRobot?.[facet] || {})) if (COURSE_KEY.test(key)) {
+		out.byRobot[facet][key] = {};
+		for (const profile of ["swerve", "mecanum"]) if (profiles?.[profile]) out.byRobot[facet][key][profile] = normalizeFacet(facet, profiles[profile], out.facets[facet]);
+	}
 	const o = saved.overall || {};
 	if (OVERALL_METHODS[o.method]) out.overall.method = o.method;
 	if (ATTEMPT_RULES[o.attempt]) out.overall.attempt = o.attempt;
@@ -188,10 +195,14 @@ export function validateScoring(cfg) {
 		if (Math.abs(total - 100) > 0.001)
 			problems.push(`${title}: the weights add up to ${round(total)}%. They must add up to exactly 100%.`);
 	};
-	for (const facet of FACET_ORDER) {
+	problems.push(...validateTerritory(cfg.territory));
+	for (const facet of COMPONENT_FACETS) {
 		checkSet(facet, cfg.facets[facet], `${facetNames[facet]} (default)`);
 		for (const [key, settings] of Object.entries(cfg.byCourse?.[facet] || {}))
 			checkSet(facet, settings, `${facetNames[facet]}, Course ${key.split("-")[1]}`);
+		for (const [key, profiles] of Object.entries(cfg.byRobot?.[facet] || {}))
+			for (const [profile, settings] of Object.entries(profiles || {}))
+				checkSet(facet, settings, `${facetNames[facet]}, Course ${key.split("-")[1]}, ${profile}`);
 	}
 	let total = 0;
 	for (const facet of FACET_ORDER) {
@@ -241,7 +252,11 @@ export function scoreSubmission(submission, config = DEFAULT_SCORING) {
 	if (!COMPONENTS[submission.facet]) return { final: 0 }; // not a scored drill (for example an old Shooting only attempt)
 	const facet = submission.facet;
 	const d = submission.data || {};
-	const settings = settingsFor(config, facet, d.course); // the course's own settings, or the drill's default
+	// Territory Breakthrough attempts (Offensive / Defensive driving) are scored from the checkpoint times (territorycore.js).
+	if (isTerritory(submission)) return territoryScore(facet, d, config.territory || TERRITORY_DEFAULTS);
+	// Offensive / Defensive attempts recorded before Territory Breakthrough keep the score saved with them (they are not ranked).
+	if (TERRITORY_FACETS.includes(facet)) return submission.score || { final: 0 };
+		const settings = settingsFor(config, facet, d.course, d.robot); // course and drivetrain-specific settings, or defaults
 	const parts = {};
 	let final = 0;
 	for (const c of COMPONENTS[facet]) {
@@ -304,7 +319,8 @@ export function overallFromFacets(facets, config = DEFAULT_SCORING) {
 }
 export function driverSummary(submissions, config = DEFAULT_SCORING) {
 	const byFacet = {};
-	submissions.forEach((entry) => (byFacet[entry.facet] ??= []).push(entry));
+	// Offense and defense only count once recorded in Territory Breakthrough (older attempts used a different scale and are not ranked).
+	submissions.filter((entry) => !TERRITORY_FACETS.includes(entry.facet) || isTerritory(entry)).forEach((entry) => (byFacet[entry.facet] ??= []).push(entry));
 	const facets = {};
 	for (const k of Object.keys(byFacet)) if (FACET_ORDER.includes(k)) facets[k] = facetValue(byFacet[k], config.overall.attempt);
 	return { ...overallFromFacets(facets, config), facets };

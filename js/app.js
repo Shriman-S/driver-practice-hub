@@ -1,4 +1,5 @@
 import { FACETS, GRADES, OBSERVATIONS } from "./constants.js";
+import { swerveExperience, swerveExperienceHtml } from "./experience.js";
 import {
 	scoreSubmission,
 	driverSummary,
@@ -6,6 +7,7 @@ import {
 	OVERALL_METHODS,
 	ATTEMPT_RULES,
 	FACET_ORDER,
+	COMPONENTS,
 } from "./scoring.js";
 import * as store from "./storage.js";
 import {
@@ -25,6 +27,7 @@ import {
 	bindCourseGallery,
 	renderCourseBuilder,
 	bindCourseBuilder,
+	courseLabel,
 } from "./courses.js";
 import { renderFormBuilder, bindFormBuilder } from "./formbuilder.js";
 import {
@@ -41,8 +44,10 @@ import {
 } from "./customforms.js";
 import { drillForm, drillFormHtml, isDrillForm, addedPart, addedQuestions } from "./drillforms.js";
 import { downloadReport } from "./pdf.js";
+import { renderTerritory, bindTerritory } from "./territory.js";
+import { territoryAnalysisHtml, bindTerritoryAnalysis, territoryFormsPanelHtml, bindTerritoryForms, openFormEditor } from "./territoryanalysis.js";
+import { isTerritory, partMax, roleRanking, groupMatches, matchSummary, pool as corePool } from "./territorycore.js";
 import { fieldHtml } from "./fields.js";
-import { courseLabel } from "./courses.js";
 import {
 	attemptsSectionHtml,
 	bindAttemptsSections,
@@ -113,6 +118,7 @@ const ctx = {
 	render: () => render(),
 	setRoute: (route) => setRoute(route),
 	applyScoring: (cfg) => applyScoring(cfg),
+	openTerritoryForms: () => { state.route = "forms"; setRoute("forms"); },
 	// Opens the shared dialog; `wide` gives forms and course pictures more room.
 	openModal: ({ wide = false } = {}) => {
 		modal.classList.toggle("wide", wide);
@@ -135,6 +141,7 @@ function toast(message) {
 const ADMIN_ROUTES = ["analysis", "scoring", "course-builder", "forms", "admin"];
 const ROUTE_KEY = "drivelab-route";
 function setRoute(route) {
+	if (state.route === "practice") savePracticeDraft();
 	if (
 		ADMIN_ROUTES.includes(route) &&
 		!state.session.isAdmin
@@ -151,6 +158,40 @@ function setRoute(route) {
 		.querySelectorAll(".nav-link")
 		.forEach((x) => x.classList.toggle("active", x.dataset.route === route));
 	render();
+}
+function savePracticeDraft() {
+	const form = document.querySelector("#practice-form");
+	if (!form) return;
+	const values = {};
+	for (const el of form.elements) if (el.name) {
+		if (el.type === "checkbox") { (values[el.name] ??= []); if (el.checked) values[el.name].push(el.value); }
+		else if (el.type === "radio") { if (el.checked) values[el.name] = el.value; }
+		else values[el.name] = el.value;
+	}
+	const hasAnswers = Object.values(values).some(v => Array.isArray(v) ? v.length > 0 : Boolean(v));
+	state.practiceDraft = hasAnswers ? { facet: state.facet, values } : null;
+}
+function restorePracticeDraft() {
+	const form = document.querySelector("#practice-form"), draft = state.practiceDraft;
+	if (!form || !draft || draft.facet !== state.facet) return false;
+	for (const el of form.elements) if (el.name && Object.hasOwn(draft.values, el.name)) {
+		const value = draft.values[el.name];
+		if (el.type === "checkbox") el.checked = value.includes(el.value);
+		else if (el.type === "radio") el.checked = value === el.value;
+		else el.value = value;
+	}
+	return true;
+}
+function filterPracticeCourses() {
+	const robot = document.querySelector('#practice-form [name="robot"]')?.value;
+	const course = document.querySelector('#practice-form [name="course"]');
+	if (!course || !robot) return;
+	for (const option of course.options) {
+		if (!option.value) continue;
+		const allowed = state.data.courses[option.value]?.robots;
+		option.hidden = Boolean(allowed?.length && !allowed.includes(robot));
+	}
+	if (course.selectedOptions[0]?.hidden) course.value = "";
 }
 // NOTE: each control needs a `name` as well as an `id`; FormData (used when submitting) only reads controls that have a name.
 // One question: label, optional description (explains how to answer), the input, then an optional small hint.
@@ -183,11 +224,12 @@ function renderPractice() {
 	return `${pageHeader("Record a practice", "Choose the drill, then record one driver's measured performance.")}<div class="facet-grid">${Object.entries(
 		FACETS,
 	)
+		.filter(([id]) => !FACETS[id].territory)
 		.map(
 			([id, x]) =>
 				`<button class="facet-card ${id === state.facet ? "selected" : ""}" data-facet="${id}"><span class="tag">${x.short}</span><strong>${x.label}</strong><span>${x.timer === "countdown" ? "90-second paired drill" : "Timed course"}</span></button>`,
 		)
-		.join("")}${publishedForms()
+		.join("")}<button class="facet-card" data-go-territory><span class="tag">OFFENSE / DEFENSE</span><strong>Territory Breakthrough</strong><span>Best-of-3 match, 60-second rounds</span></button>${publishedForms()
 		.map(
 			(x) =>
 				`<button class="facet-card ${formFacet(x.id) === state.facet ? "selected" : ""}" data-facet="${esc(formFacet(x.id))}"><span class="tag">CUSTOM</span><strong>${esc(x.title)}</strong><span>${x.sections.some((sec) => sec.tool.type !== "none") ? "Custom form with timer" : "Custom form"}</span></button>`,
@@ -279,12 +321,12 @@ const attemptsApi = {
 	openDeleteAttempt: (id) => openDeleteAttempt(id),
 	// Every attempt a panel can show: "general" = All recorded attempts (the built-in drills), otherwise one drill.
 	listFor: (scope) =>
-		scope === "general" ? builtInSubmissions() : state.data.submissions.filter((x) => x.facet === scope),
+		scope === "general" ? builtInSubmissions() : state.data.submissions.filter((x) => x.facet === scope && (scope === "speed" || isTerritory(x))),
 };
 
 // Built-in drills only. Attempts on custom forms have their own analysis and must never count toward the facet leaderboard.
 const builtInSubmissions = () =>
-	state.data.submissions.filter((x) => FACET_KEYS.includes(x.facet));
+	state.data.submissions.filter((x) => FACET_KEYS.includes(x.facet) && (x.facet === "speed" || isTerritory(x))); // offense / defense attempts from before Territory Breakthrough are not ranked
 const attemptLabel = (x) => attemptLabelOf(state, x);
 
 function renderAnalysis() {
@@ -295,7 +337,7 @@ function renderAnalysis() {
 	)
 		state.analysisView = "general"; // that form was deleted
 	const view = state.analysisView;
-	const options = `<option value="general" ${view === "general" ? "selected" : ""}>General statistics (all facets)</option>${FACET_KEYS.map((k) => `<option value="${k}" ${view === k ? "selected" : ""}>${FACETS[k].label}</option>`).join("")}${forms.length ? `<optgroup label="Custom forms">${forms.map((f) => `<option value="${esc(formFacet(f.id))}" ${view === formFacet(f.id) ? "selected" : ""}>${esc(f.title)}</option>`).join("")}</optgroup>` : ""}`;
+	const options = `<option value="general" ${view === "general" ? "selected" : ""}>General statistics (all facets)</option><option value="territory" ${view === "territory" ? "selected" : ""}>Territory Breakthrough (offense + defense)</option>${FACET_KEYS.map((k) => `<option value="${k}" ${view === k ? "selected" : ""}>${FACETS[k].label}</option>`).join("")}${forms.length ? `<optgroup label="Custom forms">${forms.map((f) => `<option value="${esc(formFacet(f.id))}" ${view === formFacet(f.id) ? "selected" : ""}>${esc(f.title)}</option>`).join("")}</optgroup>` : ""}`;
 	const picker = `<div class="hero-actions"><label class="view-picker"><span>View</span><select id="analysis-view">${options}</select></label><button class="button" id="export-pdf">Download PDF</button></div>`;
 	if (view === "general")
 		return `${pageHeader("Analysis", `General statistics across ${ALL_FACETS} facets. Ranking method: ${esc(OVERALL_METHODS[state.scoring.overall.method].label)}. ${esc(OVERALL_METHODS[state.scoring.overall.method].help)}`, picker)}${analysisGeneral(builtInSubmissions())}`;
@@ -303,6 +345,8 @@ function renderAnalysis() {
 		const form = forms.find((f) => formFacet(f.id) === view);
 		return `${pageHeader("Analysis", `${esc(form.title)}: standings, question summaries, and every recorded attempt. Choose General statistics for the overall leaderboard.`, picker)}${customAnalysisHtml(form, state.data.submissions, state.data.courses)}`;
 	}
+	if (view === "territory" || FACETS[view]?.territory)
+		return `${pageHeader("Analysis", view === "territory" ? "Territory Breakthrough: both role rankings, every match, and checkpoint statistics. Offensive and Defensive driving are scored from checkpoints crossed and time, not from opinions." : `${FACETS[view].label} in Territory Breakthrough: rankings, checkpoint statistics, and every round.`, picker)}${territoryAnalysisHtml(state, view, (opts) => attemptsSectionHtml(state, opts))}${view === "territory" ? "" : facetEquationsHtml(view, FACETS[view].label, state.scoring, state.data.courses)}`;
 	return `${pageHeader("Analysis", `${FACETS[view].label}: standings, statistics, and every recorded attempt. Choose General statistics for the overall leaderboard.`, picker)}${analysisFacet(view, state.data.submissions)}`;
 }
 
@@ -318,7 +362,7 @@ function leaderboardTable(rows, expanded = false) {
 		? rows
 				.map(
 					(r, i) =>
-						`<tr><td class="rank">#${i + 1}</td><td><strong>${esc(r.name)}</strong></td><td>${esc(r.grade)}</td><td>${r.completed}/${FACET_KEYS.length}</td><td>${r.attempts}</td>${FACET_KEYS.map((k) => facetCell(r, k)).join("")}${expanded ? `<td>${r.completed ? r.average.toFixed(2) : "--"}</td><td class="nowrap">${r.lastDate ? dateText(r.lastDate) : "--"}</td>` : ""}<td><div>${r.overall.toFixed(2)}</div><div class="bar"><i style="width:${r.overall * 10}%"></i></div></td></tr>`,
+						`<tr><td class="rank">#${i + 1}</td><td><button class="driver-link" data-driver-detail="${esc(r.name)}">${esc(r.name)}</button></td><td>${esc(r.grade)}</td><td>${r.completed}/${FACET_KEYS.length}</td><td>${r.attempts}</td>${FACET_KEYS.map((k) => facetCell(r, k)).join("")}${expanded ? `<td>${r.completed ? r.average.toFixed(2) : "--"}</td><td class="nowrap">${r.lastDate ? dateText(r.lastDate) : "--"}</td>` : ""}<td><div>${r.overall.toFixed(2)}</div><div class="bar"><i style="width:${r.overall * 10}%"></i></div></td></tr>`,
 				)
 				.join("")
 		: `<tr><td colspan="${cols}" class="empty">No practice records yet. Submitted records will appear here for administrators.</td></tr>`;
@@ -333,7 +377,7 @@ function analysisGeneral(submissions) {
 	const full = rows.filter((r) => r.completed === FACET_KEYS.length).length;
 	const overview = FACET_KEYS.map((k) => {
 		const s = facetStats(k, submissions);
-		return `<tr><td><strong>${FACETS[k].label}</strong></td><td>${s.attempts}</td><td>${s.drivers}</td><td>${s.attempts ? score2(s.average) : "--"}</td><td>${s.best ? `${score2(s.best.score.final)} <small>(${esc(s.best.driverName)})</small>` : "--"}</td></tr>`;
+		return `<tr><td><strong>${FACETS[k].label}</strong></td><td>${s.attempts}</td><td>${s.drivers}</td><td>${s.attempts ? score2(s.average) : "--"}</td><td>${s.best ? `${score2(s.best.score.final)} <small>(<button class="driver-link" data-driver-detail="${esc(s.best.driverName)}">${esc(s.best.driverName)}</button>)</small>` : "--"}</td></tr>`;
 	}).join("");
 	return `<div class="metrics">${metricTile("Recorded attempts", submissions.length)}${metricTile("Drivers assessed", rows.length)}${metricTile("Top overall score", rows[0] ? rows[0].overall.toFixed(2) : "--", true)}${metricTile(`Completed ${ALL_FACETS} facets`, full)}</div>
   <section class="panel analysis-panel" style="margin-bottom:18px"><div class="panel-heading"><div><h3>Statistics by facet</h3><p>Every recorded attempt, scores out of 10.</p></div></div><div class="table-wrap"><table><thead><tr><th>Facet</th><th>Attempts</th><th>Drivers</th><th>Average score</th><th>Best score</th></tr></thead><tbody>${overview}</tbody></table></div></section>
@@ -343,7 +387,7 @@ function analysisGeneral(submissions) {
 			.slice(0, 5)
 			.map(
 				(r, i) =>
-					`<div class="leader-row"><span class="rank">${i + 1}</span><span><span class="leader-name">${esc(r.name)}</span><br><small>${r.completed} facet${r.completed === 1 ? "" : "s"} completed</small></span><span class="leader-score">${r.overall.toFixed(2)}</span></div>`,
+								`<div class="leader-row"><span class="rank">${i + 1}</span><span><button class="driver-link leader-name" data-driver-detail="${esc(r.name)}">${esc(r.name)}</button><br><small>${r.completed} facet${r.completed === 1 ? "" : "s"} completed</small></span><span class="leader-score">${r.overall.toFixed(2)}</span></div>`,
 			)
 			.join("") || '<div class="empty">No rankings yet.</div>'
 	}</aside></div>
@@ -375,14 +419,73 @@ function analysisFacet(facet, submissions) {
 		? standings
 				.map(
 					(r, i) =>
-						`<tr><td class="rank">#${i + 1}</td><td><strong>${esc(r.name)}</strong></td><td>${esc(r.grade)}</td><td>${r.attempts}</td><td><strong>${score2(r.latest)}</strong></td><td>${score2(r.best)}</td><td>${score2(r.average)}</td></tr>`,
+					`<tr><td class="rank">#${i + 1}</td><td><button class="driver-link" data-driver-detail="${esc(r.name)}">${esc(r.name)}</button></td><td>${esc(r.grade)}</td><td>${r.attempts}</td><td><strong>${score2(r.latest)}</strong></td><td>${score2(r.best)}</td><td>${score2(r.average)}</td></tr>`,
 				)
 				.join("")
 		: `<tr><td colspan="7" class="empty">No attempts for this facet.</td></tr>`;
-	return `<div class="metrics">${metricTile("Attempts", s.attempts)}${metricTile("Drivers", s.drivers)}${metricTile("Average score", s.attempts ? score2(s.average) : "--")}${metricTile("Best score", s.best ? `${score2(s.best.score.final)}<small style="font-size:12px;color:var(--muted);font-weight:500"> ${esc(s.best.driverName)}</small>` : "--", true)}</div>
+	return `<div class="metrics">${metricTile("Attempts", s.attempts)}${metricTile("Drivers", s.drivers)}${metricTile("Average score", s.attempts ? score2(s.average) : "--")}${metricTile("Best score", s.best ? `${score2(s.best.score.final)}<small style="font-size:12px;color:var(--muted);font-weight:500"> <button class="driver-link" data-driver-detail="${esc(s.best.driverName)}">${esc(s.best.driverName)}</button></small>` : "--", true)}</div>
   <section class="panel analysis-panel" style="margin-bottom:18px"><div class="panel-heading"><div><h3>${FACETS[facet].label} standings</h3><p>Ranked by latest attempt. The overall ranking uses each driver's ${esc(ATTEMPT_RULES[state.scoring.overall.attempt].short)} in this facet.</p></div></div><div class="table-wrap"><table><thead><tr><th>Rank</th><th>Driver</th><th>Grade</th><th>Attempts</th><th>Latest</th><th>Best</th><th>Average</th></tr></thead><tbody>${table}</tbody></table></div></section>
   ${attemptsSectionHtml(state, { scope: facet, list: s.list, title: `${FACETS[facet].label} attempts`, note: "Most recent first, with the raw values behind each calculated score (each scored with its course's settings). Search or filter to narrow the list; Edit changes an attempt's answers." })}
   ${facetEquationsHtml(facet, FACETS[facet].label, state.scoring, state.data.courses)}`;
+}
+
+function driverDetailHtml(name) {
+	const attempts = builtInSubmissions().filter(x => x.driverName === name).sort((a,b) => String(a.date).localeCompare(String(b.date)) || String(a.createdAt).localeCompare(String(b.createdAt)));
+	if (!attempts.length) return "";
+	const summary = driverSummary(attempts, state.scoring), peers = driverRows(builtInSubmissions()).filter(r => r.name !== name);
+	const vals = attempts.map(x => x.score.final), lo = Math.min(...vals), hi = Math.max(...vals), pad = (hi-lo)||1;
+	const points = attempts.map((x,i) => `${attempts.length===1?50:8+i*84/(attempts.length-1)},${92-(x.score.final-lo)/pad*78}`).join(" ");
+	const byFacet = FACET_KEYS.map(f => {
+		const list = attempts.filter(x=>x.facet===f); if (!list.length) return "";
+		const scores = list.map(x=>x.score.final), comp = COMPONENTS[f];
+		// Territory parts have different sizes, so each is shown as a share of its own maximum, on a 0-10 scale.
+		const avg = Object.fromEntries(comp.map(c => [c.key, c.kind === "territory" ? (partMax(c.key, state.scoring.territory) ? mean(list.map(x=>Number(x.score[c.key]||0))) / partMax(c.key, state.scoring.territory) * 10 : 0) : mean(list.map(x=>Number(x.score[c.key]||0)))]));
+		const bestSkill = comp.reduce((a,c)=>avg[c.key]>avg[a.key]?c:a,comp[0]);
+		const worstSkill = comp.reduce((a,c)=>avg[c.key]<avg[a.key]?c:a,comp[0]);
+		const courseScores = {}; list.forEach(x=>{const k=x.data.course||"No course"; (courseScores[k]??=[]).push(x.score.final);});
+		const bestCourse = Object.entries(courseScores).sort((a,b)=>mean(b[1])-mean(a[1]))[0]?.[0];
+		const ranked = driverRows(builtInSubmissions().filter(x=>x.facet===f)).sort((a,b)=>(b.facets[f]||0)-(a.facets[f]||0));
+		const rank = ranked.findIndex(x=>x.name===name)+1;
+		return `<section class="driver-section"><h3>${esc(FACETS[f].label)}</h3><div class="driver-kpis"><span><b>${list.length}</b> attempts</span><span><b>${score2(Math.max(...scores))}</b> best score</span><span><b>${score2(mean(scores))}</b> average</span><span><b>${esc(courseLabel(state.data.courses,bestCourse))}</b> best average course</span><span><b>#${rank}</b> of ${ranked.length} drivers</span></div><p><strong>Strongest measured skill:</strong> ${esc(bestSkill.label)} (${score2(avg[bestSkill.key])}/10). <strong>Most room to grow:</strong> ${esc(worstSkill.label)} (${score2(avg[worstSkill.key])}/10).</p><div class="skill-bars">${comp.map(c=>`<div><span>${esc(c.label)}</span><meter min="0" max="10" value="${avg[c.key]}"></meter><b>${score2(avg[c.key])}</b></div>`).join("")}</div></section>`;
+	}).join("");
+	const anonymous = peers.map(r=>r.overall).sort((a,b)=>b-a);
+	const cohort = anonymous.length ? `<section class="driver-section"><h3>Anonymous comparison</h3><p>Your overall score is <strong>${summary.overall.toFixed(2)}</strong>. Other drivers are shown without names or individual profiles. Their median overall score is <strong>${score2(anonymous[Math.floor(anonymous.length/2)])}</strong>; ${anonymous.filter(v=>v<summary.overall).length} of ${anonymous.length} peers score lower.</p></section>` : "";
+	return `<div class="modal-head"><div><p class="eyebrow">DRIVER PROFILE</p><h2>${esc(name)}</h2><p class="help">Individual performance across recorded built-in driving attempts.</p></div><button class="close" id="close-modal" aria-label="Close">×</button></div><div class="driver-overview"><div><span>Overall score</span><strong>${summary.overall.toFixed(2)}</strong></div><div><span>Attempts</span><strong>${attempts.length}</strong></div><div><span>Facets completed</span><strong>${summary.completed}/${FACET_KEYS.length}</strong></div><div><span>Best recorded score</span><strong>${score2(Math.max(...vals))}</strong></div></div>${swerveExperienceHtml(swerveExperience(state.data.submissions.filter(x => x.driverName === name)))}<section class="driver-section"><h3>Progress over time</h3><p class="help">Each point is one attempt, ordered by practice date. Facet scores appear in separate colors.</p><svg class="driver-chart" viewBox="0 0 100 100" role="img" aria-label="Driver score progress over time">${FACET_KEYS.map((f,fi)=>{const a=attempts.map((x,i)=>({x,i})).filter(o=>o.x.facet===f);if(!a.length)return "";const pts=a.map(o=>`${attempts.length===1?50:8+o.i*84/(attempts.length-1)},${92-(o.x.score.final-lo)/pad*78}`).join(" ");return `<polyline class="driver-line line-${fi}" points="${pts}"/><g class="driver-points">${a.map(o=>`<circle cx="${attempts.length===1?50:8+o.i*84/(attempts.length-1)}" cy="${92-(o.x.score.final-lo)/pad*78}" r="2.2"><title>${esc(FACETS[f].label)} · ${dateText(o.x.date)} · ${score2(o.x.score.final)}</title></circle>`).join("")}</g>`}).join("")}<line x1="8" y1="92" x2="92" y2="92"/></svg><div class="chart-legend">${FACET_KEYS.map((f,i)=>`<span class="line-label line-${i}">${esc(FACETS[f].label)}</span>`).join("")}</div></section>${byFacet}${cohort}<section class="driver-section"><h3>All attempts</h3><div class="table-wrap"><table><thead><tr><th>Date</th><th>Facet</th><th>Course</th><th>Robot</th><th>Score</th><th>Measured responses</th></tr></thead><tbody>${attempts.map(x=>`<tr><td>${dateText(x.date)}</td><td>${esc(FACETS[x.facet].label)}</td><td>${esc(courseLabel(state.data.courses,x.data.course)||"--")}</td><td>${esc(x.data.robot||"--")}</td><td>${score2(x.score.final)}</td><td>${COMPONENTS[x.facet].map(c=>`${esc(c.label)}: ${score2(Number(x.score[c.key]||0))}`).join(" · ")}</td></tr>`).join("")}</tbody></table></div></section><div class="form-actions"><button type="button" class="button" id="driver-export">Export driver PDF</button></div>`;
+}
+
+function openDriverDetail(name) {
+	content.innerHTML = driverDetailHtml(name);
+	modal.classList.add("wide"); modal.showModal();
+	modal.addEventListener("close", () => modal.classList.remove("wide"), { once: true });
+	document.querySelector("#close-modal").onclick = () => modal.close();
+	document.querySelector("#driver-export").onclick = async () => {
+		const attempts = builtInSubmissions().filter(x => x.driverName === name).sort((a, b) => String(a.date).localeCompare(String(b.date)));
+		try {
+			const summary = driverSummary(attempts, state.scoring);
+			const rows = FACET_KEYS.map(f => {
+				const xs = attempts.filter(x => x.facet === f);
+				if (!xs.length) return [FACETS[f].label, "--", "--", "--", "--", "--", "--", "--"];
+				const courseTotals = {};
+				xs.forEach(x => (courseTotals[x.data.course || "No course"] ??= []).push(x.score.final));
+				const bestCourse = Object.entries(courseTotals).sort((a, b) => mean(b[1]) - mean(a[1]))[0]?.[0];
+				const components = COMPONENTS[f].map(c => ({ label: c.label, value: mean(xs.map(x => Number(x.score[c.key] || 0))) }));
+				const strongest = components.reduce((a, b) => b.value > a.value ? b : a);
+				const growth = components.reduce((a, b) => b.value < a.value ? b : a);
+				const ranked = driverRows(builtInSubmissions().filter(x => x.facet === f)).sort((a, b) => (b.facets[f] || 0) - (a.facets[f] || 0));
+				return [FACETS[f].label, String(xs.length), score2(Math.max(...xs.map(x => x.score.final))), score2(mean(xs.map(x => x.score.final))), courseLabel(state.data.courses, bestCourse), `${strongest.label} (${score2(strongest.value)})`, `${growth.label} (${score2(growth.value)})`, `#${ranked.findIndex(x => x.name === name) + 1} / ${ranked.length}`];
+			});
+			await downloadReport({
+				fileName: `DriveLab-driver-${slug(name)}-${todayKey()}.pdf`,
+				title: `Driver statistics: ${name}`,
+				subtitle: "Individual assessment of driving performance; coaching observations are excluded.",
+				metrics: [{ label: "Attempts", value: String(attempts.length) }, { label: "Overall score", value: summary.overall.toFixed(2) }, { label: "Facets completed", value: `${summary.completed}/${FACET_KEYS.length}` }],
+				blocks: [
+					{ title: "Facet summary", head: ["Facet", "Attempts", "Best score", "Average score", "Best course", "Strongest skill", "Growth area", "Anonymous rank"], body: rows },
+					{ title: "All driving attempts", orientation: "landscape", head: ["Date", "Facet", "Course", "Robot", "Score", ...FACET_KEYS.flatMap(f => COMPONENTS[f].map(c => `${FACET_SHORT[f]} ${c.label}`))], body: attempts.map(x => [dateText(x.date), FACETS[x.facet].label, courseLabel(state.data.courses, x.data.course) || "--", x.data.robot || "--", score2(x.score.final), ...FACET_KEYS.flatMap(f => COMPONENTS[f].map(c => x.facet === f ? score2(Number(x.score[c.key] || 0)) : "--"))]) },
+				],
+			});
+		} catch (err) { toast(`Could not create PDF: ${err.message}`); }
+	};
 }
 
 // Hooks for the Analysis tab: view dropdown, export button, and the per-row Delete buttons.
@@ -403,6 +506,10 @@ function bindAnalysis() {
 	app.querySelectorAll("[data-edit-attempt]").forEach((b) => {
 		if (!b.closest("[data-attempts-scope]")) b.onclick = () => openEditAttempt(attemptsApi, b.dataset.editAttempt);
 	});
+	if (!state.driverDetailClickBound) {
+		document.addEventListener("click", e => { const b = e.target.closest("[data-driver-detail]"); if (b && state.session.isAdmin) openDriverDetail(b.dataset.driverDetail); });
+		state.driverDetailClickBound = true;
+	}
 }
 
 // ---------------------------------------------------------------- PDF export: describes the view currently shown in plain data (see pdf.js)
@@ -514,8 +621,26 @@ function generalReport() {
 	};
 }
 
+function territoryReport() {
+	const subs = state.data.submissions.filter(isTerritory), t = state.scoring.territory;
+	const block = (role, name) => ({
+		title: `${name} rankings`, note: `Mean points in this role (out of ${corePool(t)}).`, orientation: "portrait", nowrap: [0, 3, 4, 5],
+		head: ["Rank", "Driver", "Grade", "Rounds", t.rankBasis === "mean" ? "Mean points" : "Ranking score", "Best"], align: ["center", "left", "left", "center", "right", "right"],
+		body: roleRanking(subs, role, t).map((r) => [`#${r.rank}`, r.name, r.grade, String(r.heats), String(r.value), String(r.best)]),
+	});
+	const matches = groupMatches(subs);
+	return {
+		fileName: `DriveLab-territory-breakthrough-${todayKey()}.pdf`, title: "Territory Breakthrough", subtitle: "Offensive / Defensive driving | points out of " + corePool(t),
+		metrics: [{ label: "Matches", value: String(matches.length) }, { label: "Forms saved", value: String(subs.length) }, { label: "Drivers", value: String(new Set(subs.map((x) => x.driverName)).size) }],
+		blocks: [block("offense", "Offensive"), block("defense", "Defensive"), {
+			title: "Matches", note: "Best of 3 rounds.", orientation: "portrait", nowrap: [0, 2],
+			head: ["Date", "Drivers", "Rounds", "Winner"], align: ["left", "left", "center", "left"],
+			body: matches.map((m) => { const r = matchSummary(m.records, m.drivers); return [m.date, `${m.drivers.A} vs ${m.drivers.B}`, `${r.wins.A}-${r.wins.B}`, r.winner ? (r.winner === "draw" ? "Draw" : m.drivers[r.winner]) : "In progress"]; }),
+		}],
+	};
+}
 function facetReport(facet) {
-	const subs = state.data.submissions,
+	const subs = state.data.submissions.filter((x) => x.facet === "speed" || isTerritory(x)),
 		s = facetStats(facet, subs),
 		numeric = FACETS[facet].fields.filter((f) => f[2] === "number");
 	const byDriver = {};
@@ -619,6 +744,7 @@ async function exportPdf() {
 	try {
 		let report;
 		if (view === "general") report = generalReport();
+		else if (view === "territory") report = territoryReport();
 		else if (isCustomFacet(view)) {
 			const form = publishedForms().find((f) => formFacet(f.id) === view);
 			report = {
@@ -748,10 +874,10 @@ function renderCourseBuilderPage() {
 	return renderCourseBuilder(ctx);
 }
 function renderForms() {
-	return renderFormBuilder(ctx);
+	return renderFormBuilder(ctx) + (state.formDraft ? "" : territoryFormsPanelHtml(state));
 }
 function renderAdmin() {
-	return `${pageHeader("Administrator", "Security, data-source, and operating guidance.")}<div class="admin-grid"><section class="panel admin-card"><h3>Connection</h3><p>${store.isRemote() ? "Firebase is configured. Submitters cannot read records; only accounts listed in the admins collection can open analysis." : "Local preview is active. Data stays only in this browser and is not appropriate for shared team use."}</p>${store.isRemote() ? `<p><strong>Your Google UID:</strong><br><code>${esc(store.getAdminUid())}</code></p><p class="help">Add this UID as the document ID in <code>admins</code> through the Firebase console, then sign in again.</p>` : "<p>Follow the README's Firebase setup steps before publishing. Do not publish with the local-preview data as if it were shared, secure storage.</p>"}</section><section class="panel admin-card"><h3>Privacy controls</h3><p>Full names, grades, notes, and submissions are never embedded in this source repository. The app does not use analytics, advertising, or a shared public name list.</p><p class="help">Names are typed in on every form; the site does not remember or suggest names.</p></section><section class="panel admin-card"><h3>Export</h3><p>Use the Analysis screen's Download PDF button. It downloads a formatted, dated PDF report of the view currently selected (general statistics, one drill, or one custom form).</p></section><section class="panel admin-card"><h3>Operational rule</h3><p>Use the same selected course layout for each facet throughout a single day. Pair defense and offense on the shared course and record each driver separately.</p></section></div>`;
+	return `${pageHeader("Administrator", "Security, data-source, and operating guidance.")}<div class="admin-grid"><section class="panel admin-card"><h3>Connection</h3><p>${store.isRemote() ? "Firebase is configured. Submitters cannot read records; only accounts listed in the admins collection can open analysis." : "Local preview is active. Data stays only in this browser and is not appropriate for shared team use."}</p>${store.isRemote() ? `<p><strong>Your Google UID:</strong><br><code>${esc(store.getAdminUid())}</code></p><p class="help">Add this UID as the document ID in <code>admins</code> through the Firebase console, then sign in again.</p>` : "<p>Follow the README's Firebase setup steps before publishing. Do not publish with the local-preview data as if it were shared, secure storage.</p>"}</section><section class="panel admin-card"><h3>Privacy controls</h3><p>Full names, grades, notes, and submissions are never embedded in this source repository. The app does not use analytics, advertising, or a shared public name list.</p><p class="help">Names are typed in on every form; the site does not remember or suggest names.</p></section><section class="panel admin-card"><h3>Export</h3><p>Use the Analysis screen's Download PDF button. It downloads a formatted, dated PDF report of the view currently selected (general statistics, one drill, or one custom form).</p></section><section class="panel admin-card"><h3>Operational rule</h3><p>Use the same selected course layout for each facet throughout a single day. Territory Breakthrough matches use one course for all three rounds.</p></section></div>`;
 }
 function render() {
 	const views = {
@@ -763,6 +889,7 @@ function render() {
 		"course-builder": renderCourseBuilderPage,
 		forms: renderForms,
 		admin: renderAdmin,
+		territory: () => renderTerritory(ctx),
 	};
 	document.querySelector("#page-title").textContent = {
 		practice: "Practice form",
@@ -773,6 +900,7 @@ function render() {
 		"course-builder": "Course builder",
 		forms: "Form builder",
 		admin: "Administrator",
+		territory: "Offense / Defense",
 	}[state.route];
 	app.innerHTML = views[state.route]();
 	bindView();
@@ -783,14 +911,29 @@ function bindView() {
 		document.querySelectorAll("[data-facet]").forEach(
 			(b) =>
 				(b.onclick = () => {
+					savePracticeDraft();
 					state.facet = b.dataset.facet;
 					render();
 				}),
 		);
 		const custom = currentCustomForm();
-		if (custom) bindCustomForm(custom, ctx);
+		if (custom) {
+			restorePracticeDraft();
+			const form = document.querySelector("#practice-form");
+			form?.addEventListener("input", savePracticeDraft);
+			form?.addEventListener("reset", () => { state.practiceDraft = null; });
+			form?.addEventListener("change", () => { filterPracticeCourses(); savePracticeDraft(); });
+			filterPracticeCourses();
+			bindCustomForm(custom, ctx);
+		}
 		else {
-			document.querySelector("#practiceDate").value = todayKey(); // names are always typed in; nothing is pre-filled (Update 47)
+			const restored = restorePracticeDraft();
+			if (!restored) document.querySelector("#practiceDate").value = todayKey();
+			const form = document.querySelector("#practice-form");
+			form.addEventListener("input", savePracticeDraft);
+			form.addEventListener("reset", () => { state.practiceDraft = null; });
+			form.addEventListener("change", () => { filterPracticeCourses(); savePracticeDraft(); });
+			filterPracticeCourses();
 			bindTimer();
 			document.querySelector("#practice-form").onsubmit = submitPractice;
 		}
@@ -805,7 +948,10 @@ function bindView() {
 		state.formReturn = "practice";
 		setRoute("forms");
 	});
-	if (state.route === "analysis") bindAnalysis();
+	document.querySelectorAll("[data-go-territory]").forEach((b) => (b.onclick = () => setRoute("territory")));
+	if (state.route === "territory") bindTerritory(ctx);
+	if (state.route === "forms") bindTerritoryForms(ctx);
+	if (state.route === "analysis") { bindAnalysis(); bindTerritoryAnalysis(ctx); }
 	if (state.route === "scoring") bindScoringEditor(ctx);
 	if (state.route === "calendar") {
 		document.querySelectorAll("[data-month]").forEach(
@@ -1036,6 +1182,7 @@ async function submitPractice(e) {
 			`${FACETS[item.facet].label} score: ${item.score.final.toFixed(2)} / 10`,
 		);
 		form.reset();
+		state.practiceDraft = null;
 		document.querySelector("#practiceDate").value = todayKey();
 	} catch (err) {
 		toast(`Could not save: ${err.message}`);

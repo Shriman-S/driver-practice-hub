@@ -30,9 +30,12 @@ import { facetCard, overallCard, bandsTableHtml, changesFromDefault, courseNameM
 import { FACET_COURSE_GROUP } from "./constants.js";
 import { publishedCourses, courseLabel } from "./courses.js";
 
+import { territoryCard } from "./formulas.js";
+import { offensePoints, defensePoints, pool as territoryPool, BONUS_CURVES, RANK_BASES } from "./territorycore.js";
+
 const clone = (value) => JSON.parse(JSON.stringify(value));
 const two = (n) => (Number.isFinite(Number(n)) ? Number(n).toFixed(2) : "--");
-const TABS = [["overall", "General statistics"], ...FACET_ORDER.map((k) => [k, FACET_NAMES[k]])];
+const TABS = [["overall", "General statistics"], ["speed", FACET_NAMES.speed], ["territory", "Offense / Defense (Territory Breakthrough)"]];
 const SHORT = { speed: "Speed", defense: "Defense", offense: "Offense" };
 
 // ---------------------------------------------------------------- courses
@@ -46,10 +49,14 @@ function courseChoices(state, facet) {
 	const list = publishedCourses(courses, FACET_COURSE_GROUP[facet]);
 	for (const key of Object.keys(state.scoringDraft.byCourse?.[facet] || {}))
 		if (!list.some((c) => c.key === key)) list.push({ key, number: Number(key.split("-")[1]), name: courseLabel(courses, key) });
+	for (const key of Object.keys(state.scoringDraft.byRobot?.[facet] || {}))
+		if (!list.some((c) => c.key === key)) list.push({ key, number: Number(key.split("-")[1]), name: courseLabel(courses, key) });
 	return list.sort((a, b) => a.number - b.number);
 }
-const hasOwn = (draft, facet, key) => Boolean(key && draft.byCourse?.[facet]?.[key]);
-const basePath = (facet, key) => (key ? `byCourse.${facet}.${key}` : `facets.${facet}`);
+const profileOf = (state) => state.scoringProfile || "mecanum";
+const robotOf = (state) => profileOf(state) === "swerve" ? "Swerve Chassis" : "REBUILT Robot";
+const hasOwn = (draft, facet, key, profile = "mecanum") => Boolean(key && (profile === "swerve" ? draft.byRobot?.[facet]?.[key]?.swerve : draft.byCourse?.[facet]?.[key]));
+const basePath = (facet, key, profile = "mecanum") => key ? (profile === "swerve" ? `byRobot.${facet}.${key}.swerve` : `byCourse.${facet}.${key}`) : `facets.${facet}`;
 // Give a course its own copy of the settings (from the default) before its first change.
 function materialize(draft, facet, key) {
 	draft.byCourse ??= { speed: {}, defense: {}, offense: {} };
@@ -163,40 +170,89 @@ function componentEditor(facet, c, s, prefix) {
 	let body = "";
 	if (c.kind === "range") {
 		const time = c.unit === "s" && facet === "speed";
-		body = `<div class="sc-grid"><label class="b-field"><span>Full marks (10) at</span>${numberInput(`${base}.full`, s.full, { label: `${c.label} full marks` })}<small class="help">${time ? "The excellent time, in seconds." : `This many ${esc(c.unitWord)} or more earns 10.`}</small></label><label class="b-field"><span>Zero points at</span>${numberInput(`${base}.zero`, s.zero, { label: `${c.label} zero points` })}<small class="help">${time ? "The slow cutoff, in seconds." : "Usually 0."}</small></label><label class="b-field sc-wide"><span>Scoring curve</span><select data-sc="${base}.curve">${Object.entries(CURVES)
+		body = `<p class="help">This component is mapped to a 0–10 score between the two benchmarks. Values beyond a benchmark are capped at 0 or 10. For time, lower values earn more; for the other measurements, higher values earn more.</p><div class="sc-grid"><label class="b-field"><span>Full marks (10) at</span>${numberInput(`${base}.full`, s.full, { label: `${c.label} full marks` })}<small class="help">${time ? "A drive at or faster than this excellent time earns 10 points for the time component." : `Reaching this ${esc(c.unitWord)} benchmark earns 10 points for this component.`}</small></label><label class="b-field"><span>Zero points at</span>${numberInput(`${base}.zero`, s.zero, { label: `${c.label} zero points` })}<small class="help">${time ? "A drive at or slower than this cutoff earns 0 time points." : "This measurement earns 0 points for this component; results below it are also capped at 0."}</small></label><label class="b-field sc-wide"><span>Scoring curve</span><select data-sc="${base}.curve">${Object.entries(CURVES)
 			.map(([k, x]) => `<option value="${k}" ${s.curve === k ? "selected" : ""}>${esc(x.label)}</option>`)
-			.join("")}</select></label></div>`;
+			.join("")}</select><small class="help">The curve controls how scores rise between zero points and full marks. Straight line gives equal value to each step; diminishing returns rewards early progress more; accelerating places more points near the benchmark.</small></label></div>`;
 	} else if (c.kind === "pace")
-		body = `<div class="sc-grid"><label class="b-field sc-wide"><span>Strictness</span>${numberInput(`${base}.strictness`, s.strictness, { min: 0, max: 10, step: "0.1", label: "Pace strictness" })}<small class="help">1 is the original rule (a lap twice as long as the other scores 5). 2 is twice as strict; 0 ignores lap consistency.</small></label></div>`;
+		body = `<div class="sc-grid"><label class="b-field sc-wide"><span>Strictness</span>${numberInput(`${base}.strictness`, s.strictness, { min: 0, max: 10, step: "0.1", label: "Pace strictness" })}<small class="help">This controls how strongly a difference between lap lengths lowers the pace score. 1 is the original rule (a lap twice as long as the other scores 5); 2 is twice as strict; 0 ignores lap consistency.</small></label></div>`;
 	else if (c.kind === "penalty")
-		body = `<div class="sc-grid"><label class="b-field sc-wide"><span>Points lost per penalty</span>${numberInput(`${base}.perPenalty`, s.perPenalty, { min: 0, max: 10, step: "0.5", label: `${c.label} points per penalty` })}<small class="help">This part starts at 10 and loses this many points for every penalty.</small></label></div>`;
+		body = `<div class="sc-grid"><label class="b-field sc-wide"><span>Points lost per penalty</span>${numberInput(`${base}.perPenalty`, s.perPenalty, { min: 0, max: 10, step: "0.5", label: `${c.label} points per penalty` })}<small class="help">The penalty component starts at 10. Subtract this amount once for each penalty; the result is capped at 0, then multiplied by this component's weight.</small></label></div>`;
 	else
-		body = `<div class="sc-grid"><label class="b-field sc-wide"><span>Accuracy for full marks (%)</span>${numberInput(`${base}.target`, s.target, { min: 1, max: 100, step: "any", label: "Accuracy for full marks" })}<small class="help">100 means only perfect shooting earns 10. 80 means 80% accuracy or better earns 10.</small></label></div>`;
+		body = `<div class="sc-grid"><label class="b-field sc-wide"><span>Accuracy for full marks (%)</span>${numberInput(`${base}.target`, s.target, { min: 1, max: 100, step: "any", label: "Accuracy for full marks" })}<small class="help">The scored-to-shot ratio is converted to a 0–10 value using this target. 100 means only perfect shooting earns 10; 80 means 80% accuracy or better earns 10. This component's weight determines its share of the final score.</small></label></div>`;
 	return `<div class="sc-comp"><div class="sc-comp-head"><strong>${esc(c.label)}</strong><span class="sc-symbol">${esc(c.symbol)}</span></div>${weightControl(`${base}.weight`, s.weight, c.label)}${body}</div>`;
 }
 function courseBarHtml(state, facet) {
 	const draft = state.scoringDraft,
 		key = currentCourse(state),
-		choices = courseChoices(state, facet);
+		choices = courseChoices(state, facet), profile = profileOf(state);
 	const pill = (k, label, own) =>
 		`<button type="button" class="sc-course ${k === key ? "active" : ""}" data-sc-course="${esc(k)}" aria-pressed="${k === key}">${esc(label)}${own ? '<span class="sc-own">own settings</span>' : ""}</button>`;
-	const copyFrom = [["", "Default settings"], ...choices.filter((c) => hasOwn(draft, facet, c.key)).map((c) => [c.key, c.name])].filter(([k]) => k !== key);
+	const copyFrom = [["", "Default settings"], ...choices.filter((c) => hasOwn(draft, facet, c.key, profile)).map((c) => [c.key, c.name])].filter(([k]) => k !== key);
 	const note = !key
 		? `These default settings score ${esc(FACET_NAMES[facet])} attempts with no course recorded${choices.some((c) => !hasOwn(draft, facet, c.key)) ? `, and these courses until they are given their own settings: ${esc(choices.filter((c) => !hasOwn(draft, facet, c.key)).map((c) => c.name).join(", "))}` : ""}.`
-		: hasOwn(draft, facet, key)
-			? `${esc(courseLabel(state.data.courses, key))} has its own settings. Changes here affect only attempts driven on this course.`
+		: hasOwn(draft, facet, key, profile)
+			? `${esc(courseLabel(state.data.courses, key))} has its own ${profile} settings. Changes here affect only this course and robot type.`
 			: `${esc(courseLabel(state.data.courses, key))} currently uses the default settings. Change any value below to give this course its own settings.`;
-	return `<div class="sc-courses"><div class="sc-courses-head"><strong>Course</strong><span class="help">Each course can be scored with its own values.${choices.length ? "" : " No courses have been published for this drill yet (Course builder)."}</span></div><div class="sc-course-list" role="group" aria-label="Choose a course">${pill("", "Default (no course recorded)", false)}${choices.map((c) => pill(c.key, `Course ${c.number}: ${c.name}`, hasOwn(draft, facet, c.key))).join("")}</div><p class="sc-course-note">${note}</p>${
+	return `<div class="sc-courses"><div class="sc-courses-head"><strong>Course and robot</strong><span class="help">Set separate values for mecanum (REBUILT / REEFSCAPE) and Swerve.${choices.length ? "" : " No courses have been published for this drill yet (Course builder)."}</span></div><label class="b-field"><span>Robot drivetrain</span><select id="sc-profile"><option value="mecanum" ${profile === "mecanum" ? "selected" : ""}>Mecanum (REBUILT / REEFSCAPE)</option><option value="swerve" ${profile === "swerve" ? "selected" : ""}>Swerve Chassis</option></select></label><div class="sc-course-list" role="group" aria-label="Choose a course">${pill("", "Default settings", false)}${choices.map((c) => pill(c.key, `Course ${c.number}: ${c.name}`, hasOwn(draft, facet, c.key, profile))).join("")}</div><p class="sc-course-note">${note}</p>${
 		key
-			? `<div class="sc-course-tools">${copyFrom.length ? `<label class="sc-copy"><span>Copy values from</span><select id="sc-copy-from">${copyFrom.map(([k, label]) => `<option value="${esc(k)}">${esc(label)}</option>`).join("")}</select></label><button type="button" class="button button-secondary button-small" id="sc-copy">Copy</button>` : ""}${hasOwn(draft, facet, key) ? `<button type="button" class="button button-secondary button-small" id="sc-use-default">Use the default settings for this course</button>` : ""}</div>`
+			? `<div class="sc-course-tools">${copyFrom.length ? `<label class="sc-copy"><span>Copy values from</span><select id="sc-copy-from">${copyFrom.map(([k, label]) => `<option value="${esc(k)}">${esc(label)}</option>`).join("")}</select></label><button type="button" class="button button-secondary button-small" id="sc-copy">Copy</button>` : ""}${hasOwn(draft, facet, key, profile) ? `<button type="button" class="button button-secondary button-small" id="sc-use-default">Use the default settings for this robot and course</button>` : ""}</div>`
 			: ""
 	}</div>`;
 }
+// Territory Breakthrough (the Offensive / Defensive practice): plain numbers and a few choices, grouped by what they control. Every part
+// of a round is a measured event, so there are no benchmarks or weights; these settings decide how many points each event is worth.
+const TERRITORY_SECTIONS = [
+	["Round", "The length of a round and the countdown before it.", [
+		["duration", "Round length (seconds)", "How long each round lasts. A round also ends as soon as the Offensive Driver reaches the finish zone. The time bonus is measured against this length.", 1],
+		["countdown", "Start countdown (seconds)", "The wait between both scorers being ready and the timers starting together on both laptops.", 0],
+	]],
+	["Checkpoint and finish points", "What each event is worth to the Offensive Driver. The Defensive Driver earns the same amount when the event is denied.", [
+		["gate1Points", "Points for G1", "Offense earns this for crossing G1; defense earns it when G1 is not crossed.", 0],
+		["gate2Points", "Points for G2", "Earned for crossing G2 (only after G1). Make later checkpoints worth more to reward getting deeper into the course.", 0],
+		["gate3Points", "Points for G3", "Earned for crossing G3 (only after G2).", 0],
+		["finishPoints", "Points for the finish", "Offense earns this for reaching the finish zone after G3; defense earns it when the finish is prevented.", 0],
+	]],
+	["Time bonus", "The extra points for a fast finish (offense) or a long delay (defense). The two always add up to the largest bonus.", [
+		["timeBonus", "Largest time bonus", "Offense earns up to this much for finishing early. Defense earns the rest: all of it if the robot does not finish.", 0],
+		["bonusCurve", "How the bonus shrinks", "", null, "select", BONUS_CURVES],
+	]],
+	["Penalties", "Penalties are always recorded. You can also make them cost points.", [
+		["penaltyPoints", "Points lost per penalty", "Taken off the score of the driver who received the penalty (never below 0). Leave at 0 for penalties to be recorded only. With a cost above 0, the two scores of a round no longer add up exactly to the total.", 0],
+	]],
+	["Rankings", "How the Offensive and Defensive leaderboards order drivers.", [
+		["rankBasis", "Rank drivers by", "", null, "select", RANK_BASES],
+		["recentRounds", "Number of recent rounds", "Used only when ranking by the most recent rounds.", 1],
+	]],
+	["Pairing suggestions", "Used only for the administrator's suggested pairings (they never change a score).", [
+		["priorScore", "Assumed score for a new driver", "A role a driver has not played yet is assumed to score this, out of the points in a round.", 0],
+		["priorWeight", "How many rounds the assumed score counts for", "Pairing suggestions blend the assumed score with a driver's real results, so one lucky or unlucky round cannot make someone look elite or hopeless. 0 uses only real results.", 0],
+		["pairWeightOffense", "Weight of offensive skill", "How much a difference in OFFENSIVE skill counts toward two drivers not being well matched. Raise it above the defense weight to match mainly on offense.", 0],
+		["pairWeightDefense", "Weight of defensive skill", "How much a difference in DEFENSIVE skill counts. Set one weight to 0 to ignore that role completely.", 0],
+	]],
+];
+export const TERRITORY_TEXT_PATHS = ["territory.bonusCurve", "territory.rankBasis"];
+function territorySettingsHtml(draft) {
+	const t = draft.territory;
+	const field = ([k, label, help, min, type, options]) => {
+		const input = type === "select"
+			? `<select data-sc="territory.${k}">${Object.entries(options).map(([id, o]) => `<option value="${id}" ${t[k] === id ? "selected" : ""}>${esc(o.label)}</option>`).join("")}</select><ul class="sc-option-notes">${Object.values(options).map((o) => `<li><strong>${esc(o.label.replace(" (recommended)", ""))}:</strong> ${esc(o.note)}</li>`).join("")}</ul>`
+			: numberInput(`territory.${k}`, t[k], { min, label });
+		return `<div class="sc-comp"><div class="sc-comp-head"><strong>${esc(label)}</strong></div>${help ? `<p class="help" style="margin:0 0 8px">${esc(help)}</p>` : ""}${input}</div>`;
+	};
+	return `<div class="panel-heading"><div><h3>Territory Breakthrough scoring</h3><p>The Offensive and Defensive drivers are scored from the checkpoints actually crossed and the time taken. With these settings a round is worth <strong>${two(territoryPool(t))}</strong> points in total.</p></div></div><div class="sc-body">${TERRITORY_SECTIONS.map(([title, note, fields]) => `<fieldset class="sc-group"><legend>${esc(title)}</legend><p class="help">${esc(note)}</p>${fields.map(field).join("")}</fieldset>`).join("")}<p class="help">Match rules are fixed: a match is three rounds of one run each, the drivers alternate roles every round, the driver with more points wins the round, and the first driver to win 2 of 3 rounds wins the match.</p></div>`;
+}
+function territoryExamplesHtml(state) {
+	const saved = state.scoring.territory, next = usable(state.scoringDraft)?.territory;
+	const cases = [["Finishes in 30 s", { g1: 5, g2: 10, g3: 20, finishTime: 30 }], ["Finishes in 40 s", { g1: 5, g2: 10, g3: 20, finishTime: 40 }], ["Finishes at the time limit", { g1: 5, g2: 10, g3: 20, finishTime: saved.duration }], ["Crosses 2 gates, no finish", { g1: 5, g2: 10 }], ["Crosses 1 gate, no finish", { g1: 5 }], ["Crosses no gates", {}]];
+	const cell = (f, d, t) => (t ? two(f(d, t).points) : "--");
+	return `<div class="table-wrap sc-table"><table><thead><tr><th>Example round</th><th>Offense now</th><th>Offense new</th><th>Defense now</th><th>Defense new</th></tr></thead><tbody>${cases.map(([n, d]) => `<tr><td>${esc(n)}</td><td>${cell(offensePoints, d, saved)}</td><td><strong>${cell(offensePoints, d, next)}</strong></td><td>${cell(defensePoints, d, saved)}</td><td><strong>${cell(defensePoints, d, next)}</strong></td></tr>`).join("")}</tbody></table></div>`;
+}
 function facetSettingsHtml(facet, state) {
+	if (facet === "territory") return territorySettingsHtml(state.scoringDraft);
 	const draft = state.scoringDraft,
 		key = currentCourse(state),
-		settings = settingsFor(draft, facet, key),
-		prefix = basePath(facet, key);
+		settings = settingsFor(draft, facet, key, robotOf(state)),
+		prefix = basePath(facet, key, profileOf(state));
 	const total = COMPONENTS[facet].reduce((t, c) => t + (Number(settings[c.key].weight) || 0), 0);
 	const title = key ? `${FACET_NAMES[facet]} score: ${courseLabel(state.data.courses, key)}` : `${FACET_NAMES[facet]} score: default settings`;
 	return `<div class="panel-heading"><div><h3>${esc(title)}</h3><p>Each part is scored out of 10; the weights decide how much each part counts in the final score.</p></div></div><div class="sc-body">${courseBarHtml(state, facet)}${COMPONENTS[facet]
@@ -230,9 +286,10 @@ function previewHtml(state) {
 	const changed = changes.length
 		? `<div class="eq-changes"><p><strong>Differences from the original DriveLab scoring</strong> (listed on the Analysis page):</p><ul>${changes.map((c) => `<li>${esc(c)}</li>`).join("")}</ul></div>`
 		: `<p class="eq-note">These are the original DriveLab scoring settings.</p>`;
+	if (tab === "territory") return `${changed}${territoryCard("offense", "Offensive driving", cfg)}${territoryCard("defense", "Defensive driving", cfg)}`;
 	const key = currentCourse(state);
-	const subtitle = key ? (hasOwn(state.scoringDraft, tab, key) ? `${courseLabel(state.data.courses, key)} (its own settings)` : `${courseLabel(state.data.courses, key)} (uses the default settings)`) : "Default settings";
-	return `${changed}${tab === "overall" ? `${overallCard(cfg)}<h4 class="sc-sub">Possible overall score by facets completed</h4>${bandsTableHtml(cfg)}` : facetCard(tab, FACET_NAMES[tab], cfg, key, subtitle)}`;
+	const subtitle = key ? (hasOwn(state.scoringDraft, tab, key, profileOf(state)) ? `${courseLabel(state.data.courses, key)} (its own settings)` : `${courseLabel(state.data.courses, key)} (uses the default settings)`) : "Default settings";
+	return `${changed}${tab === "overall" ? `${overallCard(cfg)}<h4 class="sc-sub">Possible overall score by facets completed</h4>${bandsTableHtml(cfg)}` : facetCard(tab, FACET_NAMES[tab], cfg, key, `${subtitle} · ${profileOf(state) === "swerve" ? "Swerve" : "Mecanum"}`, robotOf(state))}`;
 }
 
 // Example attempts for one drill: raw answers (editable), each part's new score, and the final score now vs. with the draft.
@@ -302,7 +359,7 @@ function refreshExampleResults(state) {
 		return;
 	}
 	state.scoringExamples.facets[tab].forEach((r, i) => {
-		const sub = { facet: tab, data: { ...r, course: currentCourse(state) } }; // scored with the selected course's settings
+		const sub = { facet: tab, data: { ...r, course: currentCourse(state), robot: robotOf(state) } }; // scored with the selected course and robot settings
 		const b = scoreSubmission(sub, saved);
 		const a = next ? scoreSubmission(sub, next) : null;
 		COMPONENTS[tab].forEach((c) => put(`${i}-${c.key}`, a ? two(a[c.key]) : "--"));
@@ -314,7 +371,7 @@ function refreshExampleResults(state) {
 // How the change would affect what is already recorded.
 function impactHtml(state) {
 	const next = usable(state.scoringDraft);
-	const built = state.data.submissions.filter((x) => FACET_ORDER.includes(x.facet));
+	const built = state.data.submissions.filter((x) => FACET_ORDER.includes(x.facet) && (x.facet === "speed" || x.data?.mode === "territory"));
 	if (!built.length) return `<p class="help">No attempts have been recorded yet, so only the examples above are affected.</p>`;
 	if (!next) return `<p class="help">Fix the problems listed at the top of the page to see the effect on recorded attempts.</p>`;
 	const rescore = (cfg) => built.map((x) => ({ ...x, score: scoreSubmission(x, cfg) }));
@@ -322,6 +379,13 @@ function impactHtml(state) {
 		after = rescore(next);
 	if (state.scoringTab !== "overall") {
 		const f = state.scoringTab;
+		if (f === "territory") {
+			const b = before.filter((x) => x.facet !== "speed"),
+				a = after.filter((x) => x.facet !== "speed");
+			if (!b.length) return `<p class="help">No Territory Breakthrough rounds have been recorded yet.</p>`;
+			const moved = b.filter((x, i) => Math.abs(x.score.final - a[i].score.final) >= 0.005).length;
+			return `<p class="sc-impact">${b.length} recorded Offensive / Defensive form${b.length === 1 ? "" : "s"}; ${moved} would change score. Saving re-scores them from their recorded checkpoint times.</p>`;
+		}
 		const b = before.filter((x) => x.facet === f),
 			a = after.filter((x) => x.facet === f);
 		if (!b.length) return `<p class="help">No ${esc(FACET_NAMES[f])} attempts have been recorded yet.</p>`;
@@ -360,7 +424,7 @@ export function renderScoringEditor(ctx) {
   <section class="panel sc-settings" id="sc-settings">${tab === "overall" ? overallSettingsHtml(draft) : facetSettingsHtml(tab, state)}</section>
   <section class="panel sc-preview"><div class="panel-heading"><div><h3>Live preview of the Analysis page</h3><p>Generated automatically from the settings on the left. This is the explanation administrators will see on the Analysis page after saving.</p></div></div><div class="eq-body" id="sc-preview">${previewHtml(state)}</div></section>
 </div>
-<section class="panel sc-examples"><div class="panel-heading"><div><h3>${tab === "overall" ? "Example drivers" : `Example ${esc(FACET_NAMES[tab])} attempts${currentCourse(state) ? ` on ${esc(courseLabel(state.data.courses, currentCourse(state)))}` : " (default settings)"}`}</h3><p><strong>Current</strong> uses the saved settings; <strong>New</strong> uses the settings on this page${tab === "overall" ? "" : " for the course selected above"}. Edit any example, or add your own, to see how the change affects scores.</p></div><div class="item-actions"><button type="button" class="button button-secondary button-small" id="ex-add">Add example</button><button type="button" class="button button-secondary button-small" id="ex-reset">Reset examples</button></div></div><div class="sc-examples-body">${tab === "overall" ? overallExamplesHtml(state) : facetExamplesHtml(state, tab)}</div></section>
+<section class="panel sc-examples"><div class="panel-heading"><div><h3>${tab === "overall" ? "Example drivers" : `Example ${esc(tab === "territory" ? "Territory Breakthrough" : FACET_NAMES[tab])} ${tab === "territory" ? "rounds" : "attempts"}${tab === "territory" ? "" : currentCourse(state) ? ` on ${esc(courseLabel(state.data.courses, currentCourse(state)))}` : " (default settings)"}`}</h3><p><strong>Current</strong> uses the saved settings; <strong>New</strong> uses the settings on this page${tab === "overall" ? "" : " for the course selected above"}. Edit any example, or add your own, to see how the change affects scores.</p></div>${tab === "territory" ? "" : '<div class="item-actions"><button type="button" class="button button-secondary button-small" id="ex-add">Add example</button><button type="button" class="button button-secondary button-small" id="ex-reset">Reset examples</button></div>'}</div><div class="sc-examples-body" id="sc-tex">${tab === "overall" ? overallExamplesHtml(state) : tab === "territory" ? territoryExamplesHtml(state) : facetExamplesHtml(state, tab)}</div></section>
 <section class="panel sc-examples"><div class="panel-heading"><div><h3>Effect on recorded ${tab === "overall" ? "drivers" : "attempts"}</h3><p>${tab === "overall" ? "The real leaderboard re-scored with the settings on this page (all drills and the overall ranking)." : "The real attempts for this drill, re-scored with the settings on this page."}</p></div></div><div class="sc-examples-body" id="sc-impact">${impactHtml(state)}</div></section>`;
 }
 
@@ -383,14 +447,15 @@ export function bindScoringEditor(ctx) {
 	const refresh = () => {
 		showErrors();
 		const total =
-			state.scoringTab === "overall"
+			state.scoringTab === "territory" ? 0 : state.scoringTab === "overall"
 				? FACET_ORDER.reduce((t, k) => t + (Number(state.scoringDraft.overall.weights[k]) || 0), 0)
-				: COMPONENTS[state.scoringTab].reduce((t, c) => t + (Number(settingsFor(state.scoringDraft, state.scoringTab, currentCourse(state))[c.key].weight) || 0), 0);
+				: COMPONENTS[state.scoringTab].reduce((t, c) => t + (Number(settingsFor(state.scoringDraft, state.scoringTab, currentCourse(state), robotOf(state))[c.key].weight) || 0), 0);
 		const totalBox = document.querySelector("#sc-total .sc-total");
 		if (totalBox) totalBox.outerHTML = totalHtml(total);
 		document.querySelector("#sc-preview").innerHTML = previewHtml(state);
 		document.querySelector("#sc-impact").innerHTML = impactHtml(state);
-		refreshExampleResults(state);
+		if (state.scoringTab === "territory") document.querySelector("#sc-tex").innerHTML = territoryExamplesHtml(state);
+		else refreshExampleResults(state);
 	};
 	const redraw = () => {
 		const y = window.scrollY;
@@ -410,7 +475,13 @@ export function bindScoringEditor(ctx) {
 			materialize(state.scoringDraft, parts[1], parts[2]); // the course's first change gives it its own settings
 			if (first) setTimeout(refreshCourseBar); // show the "own settings" badge and tools without losing focus
 		}
-		const textual = path.endsWith(".curve") || path === "overall.method" || path === "overall.attempt";
+		if (parts[0] === "byRobot") {
+			state.scoringDraft.byRobot ??= { speed: {}, defense: {}, offense: {} };
+			state.scoringDraft.byRobot[parts[1]] ??= {};
+			state.scoringDraft.byRobot[parts[1]][parts[2]] ??= {};
+			state.scoringDraft.byRobot[parts[1]][parts[2]].swerve ??= clone(state.scoringDraft.byCourse?.[parts[1]]?.[parts[2]] || state.scoringDraft.facets[parts[1]]);
+		}
+		const textual = path.endsWith(".curve") || path === "overall.method" || path === "overall.attempt" || TERRITORY_TEXT_PATHS.includes(path);
 		const value = textual ? el.value : el.value === "" ? "" : Number(el.value);
 		setPath(state.scoringDraft, path, value);
 		settings.querySelectorAll(`[data-sc="${path}"]`).forEach((other) => {
@@ -429,6 +500,12 @@ export function bindScoringEditor(ctx) {
 				const path = b.dataset.scBalance;
 				const bits = path.split(".");
 				if (bits[0] === "byCourse") materialize(state.scoringDraft, bits[1], bits[2]);
+				if (bits[0] === "byRobot") {
+					state.scoringDraft.byRobot ??= { speed: {}, defense: {}, offense: {} };
+					state.scoringDraft.byRobot[bits[1]] ??= {};
+					state.scoringDraft.byRobot[bits[1]][bits[2]] ??= {};
+					state.scoringDraft.byRobot[bits[1]][bits[2]].swerve ??= clone(state.scoringDraft.byCourse?.[bits[1]]?.[bits[2]] || state.scoringDraft.facets[bits[1]]);
+				}
 				const group = getPath(state.scoringDraft, path);
 				const flat = path === "overall.weights"; // { speed: 25, ... } rather than { time: { weight: 70 }, ... }
 				const keys = Object.keys(group);
@@ -450,6 +527,12 @@ export function bindScoringEditor(ctx) {
 				const k = b.dataset.scDefault;
 				const course = currentCourse(state);
 				if (k === "overall") state.scoringDraft.overall = clone(DEFAULT_SCORING.overall);
+				else if (course && profileOf(state) === "swerve") {
+					state.scoringDraft.byRobot ??= { speed: {}, defense: {}, offense: {} };
+					state.scoringDraft.byRobot[k] ??= {};
+					state.scoringDraft.byRobot[k][course] ??= {};
+					state.scoringDraft.byRobot[k][course].swerve = clone(DEFAULT_SCORING.facets[k]);
+				}
 				else if (course) {
 					materialize(state.scoringDraft, k, course);
 					state.scoringDraft.byCourse[k][course] = clone(DEFAULT_SCORING.facets[k]);
@@ -461,6 +544,7 @@ export function bindScoringEditor(ctx) {
 
 	// Course picker and its tools (drill tabs only). refreshCourseBar() redraws only this bar, so typing is never interrupted.
 	const bindCourseBar = (root) => {
+		root.querySelector("#sc-profile")?.addEventListener("change", e => { state.scoringProfile = e.target.value; redraw(); });
 		root.querySelectorAll("[data-sc-course]").forEach(
 			(b) =>
 				(b.onclick = () => {
@@ -473,7 +557,12 @@ export function bindScoringEditor(ctx) {
 				key = currentCourse(state),
 				from = document.querySelector("#sc-copy-from").value;
 			materialize(state.scoringDraft, facet, key);
-			state.scoringDraft.byCourse[facet][key] = clone(settingsFor(state.scoringDraft, facet, from));
+				if (profileOf(state) === "swerve") {
+					state.scoringDraft.byRobot ??= { speed: {}, defense: {}, offense: {} };
+					state.scoringDraft.byRobot[facet] ??= {};
+					state.scoringDraft.byRobot[facet][key] ??= {};
+					state.scoringDraft.byRobot[facet][key].swerve = clone(settingsFor(state.scoringDraft, facet, from, robotOf(state)));
+				} else state.scoringDraft.byCourse[facet][key] = clone(settingsFor(state.scoringDraft, facet, from, robotOf(state)));
 			markDirty();
 			redraw();
 		});
@@ -481,7 +570,8 @@ export function bindScoringEditor(ctx) {
 			const facet = state.scoringTab,
 				key = currentCourse(state);
 			if (!confirm("Remove this course's own settings? Its attempts will be scored with the default settings (after you save).")) return;
-			delete state.scoringDraft.byCourse[facet][key];
+			if (profileOf(state) === "swerve") delete state.scoringDraft.byRobot?.[facet]?.[key]?.swerve;
+			else delete state.scoringDraft.byCourse[facet][key];
 			markDirty();
 			redraw();
 		});
@@ -522,7 +612,7 @@ export function bindScoringEditor(ctx) {
 				redraw();
 			}),
 	);
-	document.querySelector("#ex-add").onclick = () => {
+	(document.querySelector("#ex-add") || {}).onclick = () => {
 		if (state.scoringTab === "overall")
 			examples.overall.push({ label: `Example driver ${examples.overall.length + 1}`, speed: "", defense: "", offense: "" });
 		else {
@@ -535,7 +625,7 @@ export function bindScoringEditor(ctx) {
 		const inputs = document.querySelectorAll(".sc-label-input");
 		inputs[inputs.length - 1]?.select();
 	};
-	document.querySelector("#ex-reset").onclick = () => {
+	(document.querySelector("#ex-reset") || {}).onclick = () => {
 		if (state.scoringTab === "overall") examples.overall = clone(DEFAULT_EXAMPLES.overall);
 		else examples.facets[state.scoringTab] = clone(DEFAULT_EXAMPLES.facets[state.scoringTab]);
 		markDirty();

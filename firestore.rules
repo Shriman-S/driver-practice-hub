@@ -20,6 +20,18 @@ service cloud.firestore {
     // page, and `calendarExport`, the team Google Calendar ID and last export summary) are administrator-only. Only administrators write.
     match /settings/{id} { allow read: if id == 'scoring' || admin(); allow write: if admin(); }
 
+    // Territory Breakthrough matches (the Offensive / Defensive practice). The two scoring laptops share ONE small document per match,
+    // addressed by its short match code: anyone signed in (the anonymous recorder identity is enough) can open a match whose code they
+    // know, create one, and update it, but nobody except an administrator can LIST matches, so codes cannot be browsed. The document
+    // holds only the set-up and the live round state; scores are saved as ordinary submissions (administrator-only to read).
+    match /matches/{id} {
+      allow get: if signedIn();
+      allow list: if admin();
+      allow create: if signedIn() && request.resource.data.id == id && id.size() <= 12 && request.resource.data.keys().hasOnly(['id','createdAt','date','mode','drivers','grades','course','robots','scorers','coach','round','status','ready','done','startAt','restart','probe','host']);
+      allow update: if signedIn() && request.resource.data.id == id;
+      allow delete: if admin();
+    }
+
     // The list of administrator accounts. Only an existing administrator can see or change it.
     match /admins/{id} { allow read, write: if admin(); }
   }

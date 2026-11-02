@@ -47,21 +47,6 @@ const PENALTY_DESCRIPTION = [
 	"Drivers can get multiple penalties for the same criteria (ex. if the driver hits a chair 3 separate times, they receive 3 penalties).",
 ];
 
-// Shared by the Defensive and Offensive forms: both are run at the same time on two laptops for 90 seconds.
-const PAIRED_SESSION_BULLETS = [
-	"This practice will take 90 seconds (1:30).",
-	"As soon as the 90 seconds are over, both robots must be disabled.",
-];
-
-// Names and grades of the two drivers in a paired drill, written once so both forms use the same wording.
-const DRIVER_1_NAME = "Driver 1 name (Offensive driver; REBUILT)";
-const DRIVER_1_GRADE = "Driver 1 grade level (Offensive driver)";
-const DRIVER_2_NAME = "Driver 2 name (Defensive driver; REEFSCAPE)";
-const DRIVER_2_GRADE = "Driver 2 grade level (Defensive driver)";
-// Extra hint on the driver who is being ASSESSED on that form (the name saved on the leaderboard).
-const ASSESSED_HINT =
-	"This is the driver being assessed on this form. First name with last initial.";
-
 export const FACETS = {
 	speed: {
 		label: "Speed driving",
@@ -118,78 +103,31 @@ export const FACETS = {
 		],
 	},
 
+	// Offensive and Defensive driving are ONE practice, Territory Breakthrough (Release 1.6). It has its own page (territory.js) with a
+	// match manager and the two scorers' forms, so these entries only describe how its attempts appear in the Analysis tables:
+	// `fields` are the measured numbers every attempt saves (the checkpoint times, the finish time, and penalties).
+	// Attempts recorded before Release 1.6 (the fuel-based forms) stay in the database but are not shown or ranked.
 	defense: {
 		label: "Defensive driving",
 		short: "DEFENSE",
 		timer: "countdown",
+		territory: true,
 		intro: [
-			"This driving practice form assesses the driver's ability to stop another robot from entering a certain area.",
-			[
-				"This driving form will be completed in tandem with the Offensive driving form (2 laptops will be required to track both drivers).",
-				...PAIRED_SESSION_BULLETS,
-			],
-			[
-				"The driver being assessed on this form is Driver 2 (they will be driving the REEFSCAPE robot).",
-				"Driver 2's goal is to stop the REBUILT robot from scoring as many points as possible.",
-			],
+			"Territory Breakthrough: the Defensive Driver tries to stop the Offensive Driver from crossing G1, G2 and G3 in order and reaching the finish zone within 60 seconds.",
 		],
-		// Driver 1 is listed first on both paired forms so the two laptops show the drivers in the same order.
 		driverFields: [
-			["opponentName", DRIVER_1_NAME, "text", true],
-			["opponentGrade", DRIVER_1_GRADE, "select", true],
-			["driverName", DRIVER_2_NAME, "text", true, ASSESSED_HINT],
-			["grade", DRIVER_2_GRADE, "select", true],
-			["practiceDate", "Practice date", "date", true],
+			["driverName", "Defensive Driver's name", "text", true, "First name with last initial."],
+			["grade", "Driver grade level", "select", true],
+			["practiceDate", "Date of practice", "date", true],
 			COURSE_FIELD,
-			robotField("Robot driven by Driver 2 (the assessed driver)"),
+			robotField("Robot used by the Defensive Driver"),
 		],
 		fields: [
-			[
-				"scorePreventions",
-				"How many times did Driver 2 prevent Driver 1 from scoring?",
-				"number",
-				true,
-				"",
-				[
-					'Driver 2 "prevents" Driver 1 from scoring if any of the following conditions are met:',
-					[
-						"If you believe Driver 1 could have continued scoring if Driver 2 wasn't there",
-						"If you see Driver 1 needing to take a detour to score",
-					],
-				],
-				"Times scoring was prevented",
-			],
-			[
-				"fuelPreventions",
-				"How many times did Driver 2 prevent Driver 1 from gathering fuel?",
-				"number",
-				true,
-				"",
-				[
-					'Driver 2 "prevents" Driver 1 from gathering fuel if any of the following conditions are met:',
-					[
-						"If you believe Driver 1 could have continued gathering fuel if Driver 2 wasn't there",
-						"If you see Driver 1 needing to take a detour to gather fuel",
-					],
-				],
-				"Times fuel gathering was prevented",
-			],
-			[
-				"secondsWasted",
-				"How much time did Driver 2 waste for Driver 1?",
-				"number",
-				true,
-				"Enter your estimate in seconds.",
-				[
-					"Time is wasted when Driver 2 forces Driver 1 to take longer to accomplish a goal.",
-					[
-						"Make an estimate for how much faster you think Driver 1 could have completed a goal, if Driver 2 wasn't there",
-						"A goal could be anything like gathering fuel, scoring, moving to one side of the field, etc.",
-						"Your answer below should be the estimate you come up with",
-					],
-				],
-				"Estimated seconds wasted for Driver 1",
-			],
+			["g1", "Offensive Driver crossed G1 at (seconds)", "number", false, "", null, "G1 time (s)"],
+			["g2", "Offensive Driver crossed G2 at (seconds)", "number", false, "", null, "G2 time (s)"],
+			["g3", "Offensive Driver crossed G3 at (seconds)", "number", false, "", null, "G3 time (s)"],
+			["finishTime", "Offensive Driver finished at (seconds)", "number", false, "", null, "Finish time (s)"],
+			["penalties", "Penalties received by the Defensive Driver", "number", false, "", null, "Penalties"],
 		],
 	},
 
@@ -197,51 +135,23 @@ export const FACETS = {
 		label: "Offensive driving",
 		short: "OFFENSE",
 		timer: "countdown",
+		territory: true,
 		intro: [
-			"This driving practice form assesses the driver's ability to continue scoring, even while a defensive robot tries to stop them.",
-			[
-				// The text supplied for this form said "offensive" here; it pairs with the DEFENSIVE form, so it is corrected.
-				"This driving form will be completed in tandem with the Defensive driving form (2 laptops will be required to track both drivers).",
-				...PAIRED_SESSION_BULLETS,
-			],
-			[
-				"The driver being assessed on this form is Driver 1 (they will be driving the REBUILT robot).",
-				"Driver 1's goal is to continue scoring, despite Driver 2 trying to stop them.",
-			],
+			"Territory Breakthrough: the Offensive Driver must cross G1, G2 and G3 in order and reach the finish zone within 60 seconds, while a Defensive Driver tries to stop them.",
 		],
 		driverFields: [
-			["driverName", DRIVER_1_NAME, "text", true, ASSESSED_HINT],
-			["grade", DRIVER_1_GRADE, "select", true],
-			["defenderName", DRIVER_2_NAME, "text", true],
-			["defenderGrade", DRIVER_2_GRADE, "select", true],
-			["practiceDate", "Practice date", "date", true],
+			["driverName", "Offensive Driver's name", "text", true, "First name with last initial."],
+			["grade", "Driver grade level", "select", true],
+			["practiceDate", "Date of practice", "date", true],
 			COURSE_FIELD,
-			robotField("Robot driven by Driver 1 (the assessed driver)"),
+			robotField("Robot used by the Offensive Driver"),
 		],
 		fields: [
-			[
-				"fuelShot",
-				"Total fuel shot",
-				"number",
-				true,
-				"Count fuel that left the turret.",
-			],
-			["fuelScored", "Fuel scored", "number", true],
-			[
-				"evasions",
-				"How many times did Driver 1 evade Driver 2?",
-				"number",
-				true,
-				"",
-				[
-					'Driver 1 "evades" Driver 2\'s defenses if the following conditions are met:',
-					[
-						"If you believe that Driver 1 would have been able to score roughly the same amount of points, if Driver 2 wasn't there",
-						"If you see Driver 2 struggling to keep up with Driver 1",
-					],
-				],
-				"Successful evasions",
-			],
+			["g1", "Crossed G1 at (seconds)", "number", false, "", null, "G1 time (s)"],
+			["g2", "Crossed G2 at (seconds)", "number", false, "", null, "G2 time (s)"],
+			["g3", "Crossed G3 at (seconds)", "number", false, "", null, "G3 time (s)"],
+			["finishTime", "Reached the finish zone at (seconds)", "number", false, "", null, "Finish time (s)"],
+			["penalties", "Penalties received by the Offensive Driver", "number", false, "", null, "Penalties"],
 		],
 	},
 
