@@ -31,7 +31,7 @@ import { FACET_COURSE_GROUP } from "./constants.js";
 import { publishedCourses, courseLabel } from "./courses.js";
 
 import { territoryCard } from "./formulas.js";
-import { offensePoints, defensePoints, pool as territoryPool, BONUS_CURVES, RANK_BASES } from "./territorycore.js";
+import { offensePoints, defensePoints, pool as territoryPool, BONUS_CURVES, RANK_BASES, PENALTY_CURVES, penaltyBreakdown } from "./territorycore.js";
 
 const clone = (value) => JSON.parse(JSON.stringify(value));
 const two = (n) => (Number.isFinite(Number(n)) ? Number(n).toFixed(2) : "--");
@@ -216,8 +216,12 @@ const TERRITORY_SECTIONS = [
 		["timeBonus", "Largest time bonus", "Offense earns up to this much for finishing early. Defense earns the rest: all of it if the robot does not finish.", 0],
 		["bonusCurve", "How the bonus shrinks", "", null, "select", BONUS_CURVES],
 	]],
-	["Penalties", "Penalties are always recorded. You can also make them cost points.", [
-		["penaltyPoints", "Points lost per penalty", "Taken off the score of the driver who received the penalty (never below 0). Leave at 0 for penalties to be recorded only. With a cost above 0, the two scores of a round no longer add up exactly to the total.", 0],
+	["Penalties", "Penalties are always recorded. You can also make them cost points, and make repeated penalties cost more and more.", [
+		["penaltyPoints", "Points lost for a regular penalty", "Taken off the score of the driver who received the penalty (never below 0). Leave at 0 for penalties to be recorded only. With a cost above 0, the two scores of a round no longer add up exactly to the total.", 0],
+		["penaltyCurve", "How penalties add up", "", null, "select", PENALTY_CURVES],
+		["penaltyBase", "Growth number (for the growing curve)", "With the growing curve, each penalty costs this many times the one before it: 2 means each costs double the last (1x, 2x, 4x, 8x...), 3 means triple (1x, 3x, 9x, 27x...). Ignored by the fixed curve.", 1],
+		["pinningMultiplier", "Pinning penalty is worth (times a regular penalty)", "A pinning penalty costs this many times the value of a regular penalty at that point. 2 means twice as much.", 0],
+		["pinSeconds", "Pinning time limit (seconds)", "How long the Defensive Driver may hold a pin before they must back off. Shown in the rules.", 1],
 	]],
 	["Rankings", "How the Offensive and Defensive leaderboards order drivers.", [
 		["rankBasis", "Rank drivers by", "", null, "select", RANK_BASES],
@@ -230,7 +234,7 @@ const TERRITORY_SECTIONS = [
 		["pairWeightDefense", "Weight of defensive skill", "How much a difference in DEFENSIVE skill counts. Set one weight to 0 to ignore that role completely.", 0],
 	]],
 ];
-export const TERRITORY_TEXT_PATHS = ["territory.bonusCurve", "territory.rankBasis"];
+export const TERRITORY_TEXT_PATHS = ["territory.bonusCurve", "territory.rankBasis", "territory.penaltyCurve"];
 function territorySettingsHtml(draft) {
 	const t = draft.territory;
 	const field = ([k, label, help, min, type, options]) => {
@@ -239,7 +243,17 @@ function territorySettingsHtml(draft) {
 			: numberInput(`territory.${k}`, t[k], { min, label });
 		return `<div class="sc-comp"><div class="sc-comp-head"><strong>${esc(label)}</strong></div>${help ? `<p class="help" style="margin:0 0 8px">${esc(help)}</p>` : ""}${input}</div>`;
 	};
-	return `<div class="panel-heading"><div><h3>Territory Breakthrough scoring</h3><p>The Offensive and Defensive drivers are scored from the checkpoints actually crossed and the time taken. With these settings a round is worth <strong>${two(territoryPool(t))}</strong> points in total.</p></div></div><div class="sc-body">${TERRITORY_SECTIONS.map(([title, note, fields]) => `<fieldset class="sc-group"><legend>${esc(title)}</legend><p class="help">${esc(note)}</p>${fields.map(field).join("")}</fieldset>`).join("")}<p class="help">Match rules are fixed: a match is three rounds of one run each, the drivers alternate roles every round, the driver with more points wins the round, and the first driver to win 2 of 3 rounds wins the match.</p></div>`;
+	return `<div class="panel-heading"><div><h3>Territory Breakthrough scoring</h3><p>The Offensive and Defensive drivers are scored from the checkpoints actually crossed and the time taken. With these settings a round is worth <strong>${two(territoryPool(t))}</strong> points in total.</p></div></div><div class="sc-body">${TERRITORY_SECTIONS.map(([title, note, fields]) => `<fieldset class="sc-group"><legend>${esc(title)}</legend><p class="help">${esc(note)}</p>${fields.map(field).join("")}</fieldset>`).join("")}${penaltyTableHtml(t)}<p class="help">Match rules are fixed: a match is three rounds of one run each, the drivers alternate roles every round, the driver with more points wins the round, and the first driver to win 2 of 3 rounds wins the match.</p></div>`;
+}
+// What 1 to 5 penalties cost with the current settings (regular, and the next one if it is a pinning penalty).
+function penaltyTableHtml(t) {
+	if (!t.penaltyPoints) return '<p class="help">Penalties currently cost no points (they are only recorded). Enter a cost above to see the table of what penalties would cost.</p>';
+	const rows = [1, 2, 3, 4, 5].map((n) => {
+		const reg = penaltyBreakdown({ penalties: n }, t),
+			pin = penaltyBreakdown({ penalties: n - 1, pinningPenalties: 1 }, t);
+		return `<tr><td>${n}</td><td>${two(reg.list[n - 1])}</td><td>${two(reg.cost)}</td><td>${two(pin.list[n - 1])}</td></tr>`;
+	}).join("");
+	return `<div class="table-wrap sc-table"><table><thead><tr><th>Penalty number</th><th>Cost of that regular penalty</th><th>Total after that many regular penalties</th><th>Cost if that one is a pinning penalty</th></tr></thead><tbody>${rows}</tbody></table></div>`;
 }
 function territoryExamplesHtml(state) {
 	const saved = state.scoring.territory, next = usable(state.scoringDraft)?.territory;

@@ -11,7 +11,6 @@
 //     gates:      [ { n: 1, a: "c,r", b: "c,r", dir: 1 }, ... ]   checkpoints G1-G3: a straight line of cells from a to b, crossed in the
 //                                                              direction `dir` (+1 = east for an up-down line / south for a left-right line)
 //     dstart:     { col, row } | null                          the defensive robot's starting area (central)
-//     dpos:       { 1: {col,row}, 2: ..., 3: ... }             defensive positioning areas D1-D3 (coaching analysis only)
 //     restricted: ["0010...", ...]                             cells the defensive robot may not enter (offensive start zone, buffer around the finish)
 // Firestore cannot store an array inside an array, so rows are strings and each path point is a "column,row" string.
 // Speed driving courses can have a path for Lap 1 and a separate path for Lap 2; every other drill has a single Robot path (lap 1).
@@ -180,11 +179,6 @@ function territoryModel(course) {
 			b = parseXY(g?.b);
 		if (a && b && [1, 2, 3].includes(Number(g.n)) && !gates.some((x) => x.n === Number(g.n))) gates.push({ n: Number(g.n), a, b, dir: Number(g.dir) === -1 ? -1 : 1 });
 	}
-	const dpos = {};
-	for (const n of [1, 2, 3]) {
-		const cell = parseCell(course?.dpos?.[n]);
-		if (cell) dpos[n] = cell;
-	}
 	const restricted = emptyGrid();
 	if (Array.isArray(course?.restricted))
 		course.restricted.forEach((line, r) =>
@@ -192,7 +186,7 @@ function territoryModel(course) {
 				if (inBounds(c, r) && ch === "1") restricted[r * COURSE_COLS + c] = 1;
 			}),
 		);
-	return { gates: gates.sort((x, y) => x.n - y.n), dstart: parseCell(course?.dstart), dpos, restricted };
+	return { gates: gates.sort((x, y) => x.n - y.n), dstart: parseCell(course?.dstart), restricted };
 }
 const parsePoints = (list) =>
 	(Array.isArray(list) ? list : [])
@@ -236,7 +230,6 @@ function modelToSaved(model, name) {
 			? {
 					gates: model.gates.map((g) => ({ n: g.n, a: `${g.a[0]},${g.a[1]}`, b: `${g.b[0]},${g.b[1]}`, dir: g.dir })),
 					dstart: model.dstart ? { ...model.dstart } : null,
-					dpos: Object.fromEntries(Object.entries(model.dpos).map(([n, cell]) => [n, { ...cell }])),
 					restricted: gridToRows(model.restricted),
 				}
 			: {}),
@@ -340,7 +333,7 @@ export function overlayInner(model, group) {
 	return territoryOverlay(model, group) + paths + badges + end + start;
 }
 // The Territory Breakthrough layer: no-go cells for the defender, the checkpoint lines with their crossing direction, the defender's
-// starting area, and the D1-D3 positioning areas.
+// starting area.
 const gateCells = (g) => {
 	const vertical = g.a[0] === g.b[0];
 	const lo = vertical ? Math.min(g.a[1], g.b[1]) : Math.min(g.a[0], g.b[0]),
@@ -363,8 +356,6 @@ function territoryOverlay(model, group) {
 			for (let c = 0; c < COURSE_COLS; c++) if (model.restricted[r * COURSE_COLS + c]) rects += `<rect x="${c}" y="${r}" width="1" height="1"/>`;
 		out += `<g fill="${COLORS.restricted}" fill-opacity=".28" stroke="${COLORS.restricted}" stroke-opacity=".5" stroke-width=".06">${rects}</g>`;
 	}
-	for (const [n, cell] of Object.entries(model.dpos || {}))
-		out += `<circle cx="${cell.col + 0.5}" cy="${cell.row + 0.5}" r="1.15" fill="${COLORS.defense}" fill-opacity=".18" stroke="${COLORS.defense}" stroke-width=".18" stroke-dasharray=".5 .35"/><text x="${cell.col + 0.5}" y="${cell.row + 0.54}" font-size="1.05" font-weight="700" font-family="Arial,sans-serif" text-anchor="middle" dominant-baseline="central" fill="${COLORS.defense}">D${n}</text>`;
 	if (model.dstart) {
 		const x = model.dstart.col + 0.5,
 			y = model.dstart.row + 0.5;
@@ -419,10 +410,6 @@ const KEY = {
 		label: "Defensive robot starting area",
 		icon: `<polygon points="15,1.5 26,11 15,20.5 4,11" fill="${COLORS.defense}" stroke="#fff" stroke-width="1.4"/>`,
 	},
-	dpos: {
-		label: "Defensive positioning area D1 / D2 / D3 (coaching only)",
-		icon: `<circle cx="15" cy="11" r="8.5" fill="${COLORS.defense}" fill-opacity=".18" stroke="${COLORS.defense}" stroke-width="1.6" stroke-dasharray="3 2"/>`,
-	},
 	wall: {
 		label: "Wall",
 		icon: `<rect class="course-wall-fill" x="8" y="3" width="16" height="16" rx="1.5" fill="${COLORS.wall}"/>`,
@@ -463,7 +450,6 @@ export function courseFeatures(model, group) {
 		if (model.gates?.length) features.push("gate");
 		if (model.restricted?.some(Boolean)) features.push("restricted");
 		if (model.dstart) features.push("dstart");
-		if (Object.keys(model.dpos || {}).length) features.push("dpos");
 	}
 	if (hasLaps(group)) {
 		used.forEach((p) => features.push(`lap${p.lap}`));
@@ -577,8 +563,8 @@ function confirmDeleteCourse(ctx, key) {
 //   { key, name, grid, start, end, paths, lap (which lap's path is being drawn), sig (the drawing as last saved), baseName (the name as last saved
 //     or defaulted), savedName (null until this course has been saved), undo: [earlier states] }
 const BASE_TOOLS = ["draw", "erase", "start", "end", "path"];
-// Defensive + Offensive (Territory Breakthrough) courses have four more tools: checkpoints, the defender's start, D1-D3, and no-go cells.
-const toolsFor = (group) => (group === "defense" ? [...BASE_TOOLS, "gate", "dstart", "dpos", "restricted"] : BASE_TOOLS);
+// Defensive + Offensive (Territory Breakthrough) courses have three more tools: checkpoints, the defender's start, and no-go cells.
+const toolsFor = (group) => (group === "defense" ? [...BASE_TOOLS, "gate", "dstart", "restricted"] : BASE_TOOLS);
 const signature = (d) =>
 	JSON.stringify({
 		g: d.grid.join(""),
@@ -586,7 +572,7 @@ const signature = (d) =>
 		e: d.end,
 		p: d.paths.map((p) => (p.points.length >= 2 ? p.points : [])),
 		r: [...(d.robots || [])].sort(),
-		t: [d.gates || [], d.dstart || null, d.dpos || {}, (d.restricted || []).join("")],
+		t: [d.gates || [], d.dstart || null, (d.restricted || []).join("")],
 	});
 function ensureDraft(ctx) {
 	const { state } = ctx,
@@ -625,7 +611,6 @@ const snapshotOf = (d) =>
 			paths: d.paths,
 			gates: d.gates || [],
 			dstart: d.dstart || null,
-			dpos: d.dpos || {},
 			restricted: d.restricted || [],
 		}),
 	);
@@ -681,10 +666,6 @@ const TOOL_INFO = {
 		"Defensive start",
 		"Click a cell to place the defensive robot's starting area, in the middle of the field. Click another cell to move it.",
 	],
-	dpos: [
-		"Defensive areas D1-D3",
-		"Pick D1, D2 or D3, then click a cell to place that positioning area. They are for coaching analysis only: no points for visiting them.",
-	],
 	restricted: [
 		"No-go area",
 		"Click and drag to mark cells the defensive robot may not enter (the offensive start zone and the buffer around the finish). Hold Shift to erase.",
@@ -700,7 +681,6 @@ const toolIcon = (tool) =>
 	({
 		gate: `<svg viewBox="0 0 22 22" width="20" height="20"><line x1="8" y1="2" x2="8" y2="20" stroke="${COLORS.gate}" stroke-width="3"/><polygon points="20,11 11,6 11,16" fill="${COLORS.gate}"/></svg>`,
 		dstart: `<svg viewBox="0 0 22 22" width="20" height="20"><polygon points="11,2 20,11 11,20 2,11" fill="${COLORS.defense}"/></svg>`,
-		dpos: `<svg viewBox="0 0 22 22" width="20" height="20"><circle cx="11" cy="11" r="7.5" fill="${COLORS.defense}" fill-opacity=".2" stroke="${COLORS.defense}" stroke-width="2" stroke-dasharray="3 2"/></svg>`,
 		restricted: `<svg viewBox="0 0 22 22" width="20" height="20"><rect x="3" y="3" width="16" height="16" fill="${COLORS.restricted}" fill-opacity=".3" stroke="${COLORS.restricted}" stroke-width="2"/></svg>`,
 		draw: `<svg viewBox="0 0 22 22" width="20" height="20"><rect class="course-wall-fill" x="3" y="3" width="16" height="16" rx="2" fill="${COLORS.wall}"/></svg>`,
 		erase: `<svg viewBox="0 0 22 22" width="20" height="20"><rect x="3" y="3" width="16" height="16" rx="2" fill="#fff" stroke="#8aa0ad" stroke-width="2" stroke-dasharray="3 2"/></svg>`,
@@ -725,7 +705,7 @@ export function renderCourseBuilder(ctx) {
 		(t) =>
 			`<button type="button" data-tool="${t}" class="${state.courseTool === t ? "active" : ""}">${toolIcon(t)}<span>${esc(toolLabel(t, state.courseGroup))}</span></button>`,
 	).join("");
-	return `${ctx.pageHeader("Course builder", "Draw walls, place the start and end, and trace the robot path. Defensive + Offensive courses also take the checkpoints G1-G3, the defender's start, the D1-D3 areas, and no-go cells. Saved layouts appear on the Courses page for everyone.", `<button class="button button-secondary" id="go-courses">View Courses page</button>`)}<div class="facet-grid facet-grid-3">${cards}</div>
+	return `${ctx.pageHeader("Course builder", "Draw walls, place the start and end, and trace the robot path. Defensive + Offensive courses also take the checkpoints G1-G3, the defender's start, and no-go cells. Saved layouts appear on the Courses page for everyone.", `<button class="button button-secondary" id="go-courses">View Courses page</button>`)}<div class="facet-grid facet-grid-3">${cards}</div>
   <div class="builder-layout"><aside class="panel toolbox"><h3>${builderTitle(state)}</h3>
     <div class="tool-list" role="group" aria-label="Drawing tool">${tools}</div>
     <p class="help" id="tool-help"></p>
@@ -770,7 +750,6 @@ export function bindCourseBuilder(ctx) {
 		if (state.courseGroup === "defense") {
 			parts.push(`${d.gates.length}/3 checkpoints`);
 			if (d.dstart) parts.push("defender start set");
-			if (Object.keys(d.dpos).length) parts.push(`${Object.keys(d.dpos).length} defensive area${Object.keys(d.dpos).length === 1 ? "" : "s"}`);
 		}
 		const used = usablePaths(d).length;
 		if (used)
@@ -832,10 +811,6 @@ export function bindCourseBuilder(ctx) {
 			options.innerHTML = `<div class="seg" role="group" aria-label="Which checkpoint">${[1, 2, 3].map((n) => `<button type="button" data-gate-n="${n}" class="${d.gateN === n ? "active" : ""}">G${n}${placed(n) ? " &#10003;" : ""}</button>`).join("")}</div>
         <div class="toolbox-row" style="margin-top:8px"><button type="button" class="button button-secondary button-small" id="flip-gate" ${placed(d.gateN) ? "" : "disabled"}>Flip direction</button><button type="button" class="button button-secondary button-small" id="remove-gate" ${placed(d.gateN) ? "" : "disabled"}>Remove G${d.gateN}</button></div>
         <p class="help">Crossing order is G1, then G2, then G3, then the finish zone.</p>`;
-		} else if (tool === "dpos") {
-			d.dposN ??= 1;
-			options.innerHTML = `<div class="seg" role="group" aria-label="Which defensive area">${[1, 2, 3].map((n) => `<button type="button" data-dpos-n="${n}" class="${d.dposN === n ? "active" : ""}">D${n}${d.dpos[n] ? " &#10003;" : ""}</button>`).join("")}</div>
-        <button type="button" class="button button-secondary button-small" id="remove-dpos" style="margin-top:8px" ${d.dpos[d.dposN] ? "" : "disabled"}>Remove D${d.dposN}</button>`;
 		} else if (tool === "dstart") options.innerHTML = `<button type="button" class="button button-secondary button-small" id="remove-dstart" ${d.dstart ? "" : "disabled"}>Remove defensive start</button>`;
 		else if (tool === "restricted") options.innerHTML = `<button type="button" class="button button-secondary button-small" id="clear-restricted" ${d.restricted.some(Boolean) ? "" : "disabled"}>Clear no-go area</button>`;
 		else if (tool === "path") {
@@ -848,7 +823,6 @@ export function bindCourseBuilder(ctx) {
         <button type="button" class="button button-secondary button-small" id="clear-path" ${activePath().points.length ? "" : "disabled"}>Clear ${laps ? `Lap ${d.lap} path` : "path"}</button>`;
 		} else options.innerHTML = "";
 		options.querySelectorAll("[data-gate-n]").forEach((b) => (b.onclick = () => { d.gateN = Number(b.dataset.gateN); renderOptions(); }));
-		options.querySelectorAll("[data-dpos-n]").forEach((b) => (b.onclick = () => { d.dposN = Number(b.dataset.dposN); renderOptions(); }));
 		options.querySelector("#flip-gate")?.addEventListener("click", () => {
 			const g = d.gates.find((x) => x.n === d.gateN);
 			if (!g) return;
@@ -859,12 +833,6 @@ export function bindCourseBuilder(ctx) {
 		options.querySelector("#remove-gate")?.addEventListener("click", () => {
 			pushUndo(snapshotOf(d));
 			d.gates = d.gates.filter((x) => x.n !== d.gateN);
-			refreshAll();
-			renderOptions();
-		});
-		options.querySelector("#remove-dpos")?.addEventListener("click", () => {
-			pushUndo(snapshotOf(d));
-			delete d.dpos[d.dposN];
 			refreshAll();
 			renderOptions();
 		});
@@ -1043,10 +1011,7 @@ export function bindCourseBuilder(ctx) {
 			setCell(last.col, last.row, value);
 			clearMarkersAt(last.col, last.row);
 		} else if (tool === "start" || tool === "end" || tool === "dstart") place(tool, last, true);
-		else if (tool === "dpos") {
-			if (isWall(last)) ctx.toast("Choose an empty cell for the defensive area.");
-			else d.dpos[d.dposN ?? 1] = { col: last.col, row: last.row };
-		} else if (tool === "restricted") {
+		else if (tool === "restricted") {
 			value = e.shiftKey ? 0 : 1;
 			d.restricted[last.row * COURSE_COLS + last.col] = value;
 		} else if (tool === "gate") {
@@ -1073,9 +1038,7 @@ export function bindCourseBuilder(ctx) {
 				clearMarkersAt(c, r);
 			});
 		} else if (tool === "start" || tool === "end" || tool === "dstart") place(tool, p, false);
-		else if (tool === "dpos") {
-			if (!isWall(p)) d.dpos[d.dposN ?? 1] = { col: p.col, row: p.row };
-		} else if (tool === "restricted") lineCells(last, p).forEach(([c, r]) => (d.restricted[r * COURSE_COLS + c] = value));
+		else if (tool === "restricted") lineCells(last, p).forEach(([c, r]) => (d.restricted[r * COURSE_COLS + c] = value));
 		else if (tool === "gate") setGate(gateFrom, p);
 		else if (tool === "path") {
 			const path = activePath();

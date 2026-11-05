@@ -62,7 +62,7 @@ const T = {
 const settings = () => T.ctx.state.scoring.territory || core.TERRITORY_DEFAULTS;
 const serverNow = () => Date.now() + T.offset;
 const isAdmin = () => Boolean(T.ctx.state.session.isAdmin);
-const blankEntry = (role) => ({ scorer: T.scorerName[role] || "", penalties: "0", answers: {}, notes: "", saved: false, saving: false });
+const blankEntry = (role) => ({ scorer: T.scorerName[role] || "", penalties: "0", pinningPenalties: "0", answers: {}, notes: "", saved: false, saving: false });
 const entryOf = (role) => (T.entries[role] ??= blankEntry(role));
 const rolesHere = () => (T.role === "both" ? ["off", "def"] : [T.role]);
 
@@ -426,6 +426,7 @@ function dataOf(role, entry, people, run) {
 		gatesCrossed: read.gates,
 		finished: read.finished,
 		penalties: Number(entry.penalties) || 0,
+		pinningPenalties: role === "def" ? Number(entry.pinningPenalties) || 0 : 0,
 		answers,
 		notes: String(entry.notes || "").slice(0, 1000),
 	};
@@ -439,7 +440,7 @@ async function saveEntry(role) {
 	if (!entry.scorer.trim()) problems.push("Enter the coach / scorer's name.");
 	if (role === "def" && !m.run?.confirmed) problems.push("Wait for the Offensive scorer to save the checkpoint results first.");
 	problems.push(...core.runProblems(run, settings()));
-	if (Number(entry.penalties) < 0 || !Number.isFinite(Number(entry.penalties))) problems.push("Penalties must be 0 or more.");
+	if ([entry.penalties, role === "def" ? entry.pinningPenalties : 0].some((v) => Number(v) < 0 || !Number.isFinite(Number(v)))) problems.push("Penalties must be 0 or more.");
 	if (role === "off" && phaseOf(m) !== "timeup") problems.push("Wait until the round is over before saving.");
 	if (problems.length) return T.ctx.toast(problems[0]);
 	const people = roundPeople(m);
@@ -557,15 +558,15 @@ export function explainerHtml() {
     <h4>The field</h4>
     <ul><li>The offensive robot starts in a marked <strong>starting zone</strong> on one side. The defensive robot starts in a <strong>central starting area</strong>.</li>
     <li>Walls and barriers leave three <strong>checkpoints (G1, G2, G3)</strong>, each a line the robot must cross in the direction of its arrow. The <strong>finishing zone</strong> is on the opposite side.</li>
-    <li>The defender can move through the middle of the field but cannot enter the offensive starting zone or the no-go buffer around the finish. D1, D2 and D3 mark places a defender often positions; they are for coaching only and never earn points.</li></ul>
+    <li>The defender can move through the middle of the field but cannot enter the offensive starting zone or the no-go buffer around the finish.</li></ul>
     <h4>How a match works</h4>
-    <ul><li>Two drivers play a <strong>best-of-3 match: 3 rounds</strong>, one ${t.duration}-second run each.</li>
+    <ul><li>Two drivers play a <strong>best-of-3 match: 3 rounds</strong>, one ${t.duration}-second run each. Only the three runs are needed, so a practice uses three robot batteries.</li>
     <li>The drivers <strong>alternate roles every round</strong> (the first Offensive Driver plays offense in rounds 1 and 3, the other driver in round 2) and switch robots with their roles. The two robots keep their offensive and defensive jobs all match; any of the three robots can fill either job.</li>
-    <li>In a round the Offensive Driver must cross G1, then G2, then G3, then reach the finish zone. A checkpoint counts only when the center of the robot has completely crossed its line in the arrow's direction. The round ends when the offense finishes or when time runs out.</li>
+    <li>In a round the Offensive Driver must cross G1, then G2, then G3, then reach the finish zone. A checkpoint counts only when the center of the robot is fully inside the checkpoint box. The round ends when the offense finishes or when time runs out.</li>
     <li>The Defensive Driver may stand wherever they like. They never have to leave a good position to earn points: they are scored on what the offense actually achieves.</li></ul>
     <h4>How scoring works</h4>
     <ul><li><strong>Offense:</strong> ${same ? `${g[0]} points for each checkpoint crossed` : `${g[0]} / ${g[1]} / ${g[2]} points for G1 / G2 / G3`}, ${t.finishPoints} points for reaching the finish zone, plus up to ${t.timeBonus} bonus points for a quick finish (the bonus is only earned by finishing the whole route).</li>
-    <li><strong>Defense:</strong> the points of every checkpoint the offense did not cross, ${t.finishPoints} points if the finish was prevented, and the part of the time bonus the offense did not earn.${t.penaltyPoints ? ` Each penalty costs the driver who received it ${t.penaltyPoints} point${t.penaltyPoints === 1 ? "" : "s"}.` : ""}</li>
+    <li><strong>Defense:</strong> the points of every checkpoint the offense did not cross, ${t.finishPoints} points if the finish was prevented, and the part of the time bonus the offense did not earn.${t.penaltyPoints ? ` Each penalty costs the driver who received it points (see the rules below).` : ""}</li>
     <li>${t.penaltyPoints ? "Without penalties, the" : "The"} offensive and defensive scores of a round always add up to ${pts(total)}, so waiting never helps the offense and standing still never helps the defense.</li></ul>
     <div class="table-wrap"><table><thead><tr><th>Example round</th><th>Offense</th><th>Defense</th></tr></thead><tbody>${rows}</tbody></table></div>
     <p class="help">Scores come only from measurable events. How smooth or effective a drive looked goes in the coach feedback questions and never changes the score.</p>
@@ -628,17 +629,75 @@ function managerHtml() {
       <div class="t-two"><label class="field"><span>Match code</span><input id="tj-code" value="${esc(d.joinCode)}" maxlength="8" style="text-transform:uppercase" autocomplete="off" required></label>
       <label class="field"><span>This laptop scores the</span><select id="tj-role"><option value="off" ${d.joinRole === "off" ? "selected" : ""}>Offensive form</option><option value="def" ${d.joinRole === "def" ? "selected" : ""}>Defensive form</option></select></label></div>
       <button class="button" type="submit">Join match</button><p class="help" id="tj-status"></p></form>
-    <hr><details class="t-rules"><summary>Rules that apply to every round</summary>${rulesHtml()}</details></section>
-  </div>${admin ? adminToolsHtml() : ""}`;
+    </section>
+  </div>${rulesCardsHtml()}${admin ? adminToolsHtml() : ""}`;
 }
-export function rulesHtml() {
-	const s = settings();
-	return `<ul><li><strong>Checkpoint completion:</strong> a checkpoint counts only when the robot's center point has completely crossed the checkpoint line in the direction of its arrow. Approaching, touching, or partly entering it does not count.</li>
-  <li><strong>Order:</strong> G1, then G2, then G3, then the finish zone. A later checkpoint cannot count unless the earlier ones did.</li>
-  <li><strong>Course boundaries:</strong> a boundary violation (a penalty) happens when the robot's center point crosses outside the marked field. The Defensive Driver may not enter the offensive starting zone or the no-go buffer around the finish zone.</li>
-  <li><strong>Round length:</strong> ${s.duration} seconds. The round ends when time is up or as soon as the Offensive Driver reaches the finish zone; both robots must then be disabled.</li>
-  <li><strong>Numerical scores come only from measurable events.</strong> Smoothness, effectiveness and similar observations go in the coach feedback questions and never change the score.</li></ul>`;
+// ---------------------------------------------------------------- the rules and the directions for each driver (shown to everyone)
+// Written for drivers and scorers to read aloud: short sentences, one idea each. Numbers come from the current scoring settings.
+const money = (n) => pts(n);
+function penaltyRule(t) {
+	if (!t.penaltyPoints) return "Penalties are written down for coaching. With the current settings they do not take points away.";
+	const steps = [1, 2, 3, 4].map((k) => money(t.penaltyPoints * (core.PENALTY_CURVES[t.penaltyCurve] || core.PENALTY_CURVES.fixed).f(k, t.penaltyBase)));
+	return t.penaltyCurve === "growing"
+		? `Each penalty takes points off the score of the driver who got it, and every penalty costs ${t.penaltyBase} times as much as the one before: the 1st costs ${steps[0]}, the 2nd ${steps[1]}, the 3rd ${steps[2]}, the 4th ${steps[3]}, and so on. Scores never go below 0.`
+		: `Each regular penalty takes ${money(t.penaltyPoints)} point${t.penaltyPoints === 1 ? "" : "s"} off the score of the driver who got it. Scores never go below 0.`;
 }
+function rulesCardsHtml() {
+	return `<section class="panel t-card" style="margin-top:18px"><h3>What each driver does</h3><p class="help">Read these before the match. The Offensive Driver and the Defensive Driver have different jobs.</p>${directionsHtml()}</section>
+  <section class="panel t-card" style="margin-top:18px"><h3>Rules of Territory Breakthrough</h3><p class="help">These rules apply to every round, for everyone.</p>${rulesSetHtml()}</section>`;
+}
+export function rulesSetHtml() {
+	const t = settings();
+	const pin = t.penaltyPoints ? `A pinning penalty is worth <strong>${t.pinningMultiplier} times</strong> a regular penalty (${t.pinningMultiplier === 2 ? "twice as much" : `${t.pinningMultiplier} times as much`}).` : `A pinning penalty is recorded like a regular penalty, and counts as ${t.pinningMultiplier} times a regular penalty if penalties cost points.`;
+	return `<ol class="t-rules-list">
+  <li><strong>The match.</strong> Two drivers play <strong>3 rounds</strong>. Every round is one run of <strong>${t.duration} seconds</strong>. In each round one driver is the <strong>Offensive Driver</strong> and the other is the <strong>Defensive Driver</strong>. The drivers swap roles every round, and they swap robots when they swap roles.</li>
+  <li><strong>Starting.</strong> The Offensive robot starts inside the <strong>starting zone</strong>. The Defensive robot starts in the <strong>defensive starting area</strong> in the middle of the field. Nobody drives until the timer starts. Both robots may move only after the ${t.countdown}-second countdown ends.</li>
+  <li><strong>The route.</strong> The Offensive Driver must cross <strong>G1, then G2, then G3</strong>, and then enter the <strong>finish zone</strong>. The order never changes. G2 does not count until G1 has counted, G3 does not count until G2 has counted, and the finish does not count until G3 has counted.</li>
+  <li><strong>What counts as crossing.</strong> A checkpoint counts only when the <strong>center of the robot is fully inside</strong> the checkpoint box. Getting close, touching the line, or being partly over it does <strong>not</strong> count. The same is true for the finish zone.</li>
+  <li><strong>The end of a round.</strong> A round ends when the Offensive Driver enters the finish zone, or when ${t.duration} seconds are over, whichever is first. When the round ends both robots must be disabled at once.</li>
+  <li><strong>The field.</strong> Both robots must stay inside the field. If the <strong>center</strong> of a robot goes outside the marked boundary, that driver gets a <strong>penalty</strong>.</li>
+  <li><strong>No-go areas.</strong> The Defensive robot may <strong>not</strong> enter the offensive starting zone or the finish zone. If it does, the Defensive Driver gets a <strong>penalty</strong>. The Defensive robot may move anywhere else it wants, as often as it wants.</li>
+  <li><strong>Pinning.</strong> <em>Pinning means a robot is physically unable to move the way its driver wants because of what the other robot is doing.</em> For example, the Defensive Driver pushes straight into the Offensive robot and the Offensive Driver cannot move in the direction they want. When that happens, a <strong>${t.pinSeconds}-second pinning countdown</strong> starts.
+    <ul><li>The Defensive Driver may hold the pin for up to <strong>${t.pinSeconds} seconds</strong>.</li>
+    <li>When the ${t.pinSeconds} seconds are over, the Defensive Driver must <strong>back off</strong>. Backing off means stop pushing and move away so the Offensive robot is free to move again.</li>
+    <li>A Defensive Driver who is still holding the pin after ${t.pinSeconds} seconds gets a <strong>pinning penalty</strong>. ${pin}</li>
+    <li>If the Offensive robot is pinned again later in the round, a new countdown starts and the same rule applies.</li>
+    <li>An Offensive Driver cannot get a pinning penalty.</li></ul></li>
+  <li><strong>Penalties.</strong> ${penaltyRule(t)} The scorer for each driver counts that driver's penalties and writes them on the form: <strong>regular penalties</strong> (leaving the field, entering a no-go area, or another rule break) and, for the Defensive Driver, <strong>pinning penalties</strong>.</li>
+  <li><strong>Safety.</strong> Drive safely. Do not hit the other robot hard on purpose or try to damage it, and do not tip it over on purpose. A coach may stop a round at any time if a robot or a person is in danger, and the round is then driven again.</li>
+  <li><strong>Points.</strong> Points come only from what really happens, never from opinions. The Offensive Driver earns points for each checkpoint crossed, for reaching the finish zone, and for finishing quickly. The Defensive Driver earns points for each checkpoint the offense did <strong>not</strong> cross, for stopping the finish, and for making the run take longer. The two scores of a round always add up to ${money(core.pool(t))}${t.penaltyPoints ? " before penalties" : ""}.</li>
+  <li><strong>Winning.</strong> The driver with <strong>more points</strong> in a round wins the round. The first driver to win <strong>2 of the 3 rounds</strong> wins the match. If each driver wins one round, the driver with more total points wins.</li>
+  <li><strong>The scorers.</strong> The <strong>Offensive scorer</strong> records the checkpoint and finish times with the checkpoint buttons. These official results are used for both drivers. The <strong>Defensive scorer</strong> watches the same results appear, counts the Defensive Driver's penalties (including pinning), and writes the coach feedback. Smooth driving, good decisions and similar opinions go in the coach feedback only. They never change the score.</li>
+</ol>`;
+}
+export function directionsHtml() {
+	const t = settings();
+	return `<div class="t-directions">
+  <section class="t-direction t-off"><h4><span class="tag t-off">OFFENSIVE DRIVER</span></h4>
+    <p class="t-goal"><strong>Your goal:</strong> drive from the starting zone through <strong>G1, G2 and G3 in that order</strong>, then into the <strong>finish zone</strong>, as <strong>fast</strong> as you can before ${t.duration} seconds run out.</p>
+    <p><strong>How to do it:</strong></p>
+    <ul><li><strong>Start moving right away.</strong> Waiting does not help you. Every second you wait is bonus points lost, and the Defensive Driver can simply stay where they are.</li>
+    <li><strong>Look for the open way.</strong> Before the round, look at where the Defensive robot starts. Pick the opening that looks easiest to reach.</li>
+    <li><strong>Watch the defender while you drive.</strong> If they move to block your opening, change your route and use a different way around the walls.</li>
+    <li><strong>Go fast through the openings.</strong> Slow down only as much as you need for a clean turn.</li>
+    <li><strong>Make small, accurate turns.</strong> Wild steering wastes time and can put you outside the field.</li>
+    <li><strong>Remember the order.</strong> Crossing G3 first does not count. Go to the next checkpoint in order.</li>
+    <li><strong>If you are pinned,</strong> do not panic. Try to turn away or back up to a new angle. The defender must let you go after ${t.pinSeconds} seconds.</li>
+    <li><strong>Stay inside the field.</strong> Keep the center of your robot inside the boundary.</li></ul></section>
+  <section class="t-direction t-def"><h4><span class="tag t-def">DEFENSIVE DRIVER</span></h4>
+    <p class="t-goal"><strong>Your goal:</strong> <strong>stop the Offensive Driver</strong> from crossing G1, G2 and G3 and reaching the finish zone before ${t.duration} seconds run out. You score points for every checkpoint you deny, for stopping the finish, and for making the run slow.</p>
+    <p><strong>How to do it:</strong></p>
+    <ul><li><strong>Start in the middle and read the offense.</strong> Watch which opening the Offensive robot drives toward.</li>
+    <li><strong>Guard the next opening.</strong> Move to the opening the offense needs next. Guard G1 first. If the offense gets through G1, move toward G2, then G3.</li>
+    <li><strong>Stay between the offense and its next checkpoint.</strong> Blocking the way works better than chasing from behind.</li>
+    <li><strong>Move early.</strong> Reposition as soon as you see the offense change direction, not after they have already passed you.</li>
+    <li><strong>You do not have to keep moving.</strong> If you are already in a good blocking spot, stay there. You never lose points for staying in a good spot.</li>
+    <li><strong>Block, do not pin for long.</strong> If the offense cannot move because of you, count ${t.pinSeconds} seconds in your head. Then back off. Holding longer is a pinning penalty.</li>
+    <li><strong>Stay out of the no-go areas.</strong> Never enter the offensive starting zone or the buffer around the finish zone.</li>
+    <li><strong>Drive under control.</strong> Smooth, sure driving is more effective than fast, wild driving.</li></ul></section>
+</div>`;
+}
+
 // Administrators only: the two rankings and pairing suggestions.
 function adminToolsHtml() {
 	const subs = T.ctx.state.data.submissions;
@@ -693,6 +752,7 @@ function consoleHtml() {
 	return `${head}<section class="panel t-card t-timerbox"><div class="t-timer-meta"><span class="tag">ROUND ${people.round} OF ${core.ROUNDS}</span><small>This laptop scores: ${roleText}</small>${m.mode === "sync" ? `<small id="t-clock-status">${esc(T.clock)}</small><button type="button" class="button button-secondary button-small" id="t-resync">Re-measure clock</button>` : ""}</div>
     <div class="t-clock" id="t-clock" data-phase="${T.phase}">${clockText(m)}</div>
     <div class="t-start">${startControls(m)}</div></section>
+    <details class="t-explain" id="t-rules-box" ${T.rulesOpen ? "open" : ""}><summary>Rules and directions for the drivers</summary><div class="t-explain-body"><h4>What each driver does</h4>${directionsHtml()}<h4>Rules</h4>${rulesSetHtml()}</div></details>
     <div class="t-panels ${T.role === "both" ? "two" : ""}">${rolesHere().map((role) => panelHtml(role, people)).join("")}</div>
     <section class="panel t-card"><h3>Match so far</h3>${summaryHtml(summary, m.drivers)}</section>`;
 }
@@ -728,12 +788,21 @@ function panelHtml(role, people) {
     <label class="field"><span>Coach / scorer's name <b class="required">*</b></span><input data-e="${role}:scorer" value="${esc(entry.scorer)}" autocomplete="off"></label>
     <h4>Objective results</h4>
     <div id="run-${role}">${runHtml(role)}</div>
-    <label class="field"><span>${role === "off" ? "How many penalties did the Offensive Driver receive?" : "How many penalties did the Defensive Driver receive?"}</span><input type="number" min="0" step="1" data-e="${role}:penalties" value="${esc(entry.penalties)}"><small class="help">${role === "def" ? "Did the Defensive Driver receive any penalties? Yes if this is above 0." : "Enter 0 if none."}</small></label>
+    <h4>Penalties</h4>
+    <label class="field"><span>${role === "off" ? "How many regular penalties did the Offensive Driver receive?" : "How many regular penalties did the Defensive Driver receive?"}</span><input type="number" min="0" step="1" data-e="${role}:penalties" value="${esc(entry.penalties)}"><small class="help">${role === "off" ? "Count each time the center of the robot left the field. Enter 0 if none." : "Count each time the Defensive robot entered a no-go area or left the field, or broke another rule. Do not count pinning here. Enter 0 if none."}</small></label>
+    ${role === "def" ? `<label class="field"><span>How many pinning penalties did the Defensive Driver receive?</span><input type="number" min="0" step="1" data-e="def:pinningPenalties" value="${esc(entry.pinningPenalties)}"><small class="help">Pinning: the Offensive robot cannot move the way its driver wants because of the Defensive robot. The Defensive Driver may hold it for ${settings().pinSeconds} seconds, then must back off. Add 1 each time the Defensive Driver was still holding the pin after ${settings().pinSeconds} seconds.</small></label>` : ""}
+    <p class="t-live" id="pen-cost-${role}">${penaltyLine(role, entry)}</p>
     <h4>Coach feedback <small>(for coaching only; never part of the score)</small></h4>
     ${feedbackFor(role).map((q) => questionHtml(role, q, entry)).join("")}
     <label class="field"><span>Notes</span><textarea data-e="${role}:notes" maxlength="1000" rows="3">${esc(entry.notes)}</textarea></label>
     ${waiting}<div class="t-actions"><button class="button" type="button" data-save="${role}" ${canSave ? "" : "disabled"}>Save ${title.toLowerCase()} for round ${m.round}</button></div></section>`;
 }
+const penaltyLine = (role, entry) => {
+	const t = settings();
+	if (!t.penaltyPoints) return "Penalties are recorded for coaching. They do not take points off the score with the current settings.";
+	const b = core.penaltyBreakdown({ penalties: entry.penalties, pinningPenalties: role === "def" ? entry.pinningPenalties : 0 }, t);
+	return `Penalty cost: <strong>${pts(b.cost)}</strong> point${b.cost === 1 ? "" : "s"} off this driver's score.`;
+};
 // The checkpoint buttons (Offensive form only), the Yes/No + time table, and the live score for one form. Redrawn alone while a round is
 // being recorded. Both forms show the SAME official results; only the Offensive form can change them.
 function runHtml(role) {
@@ -795,6 +864,7 @@ export function bindTerritory(ctx) {
 	const root = document.querySelector("#t-root");
 	if (!root) return;
 	document.querySelector("#t-explain")?.addEventListener("toggle", (e) => (T.explainerOpen = e.target.open));
+	document.querySelector("#t-rules-box")?.addEventListener("toggle", (e) => (T.rulesOpen = e.target.open));
 	document.querySelector("#t-leave")?.addEventListener("click", () => {
 		if (!confirm("Leave this match? You can rejoin a two-laptop match with its code.")) return;
 		leaveMatch();
@@ -940,6 +1010,10 @@ function bindConsole(root) {
 			const [role, field] = t.dataset.e.split(":");
 			entryOf(role)[field] = t.value;
 			if (field === "scorer") T.scorerName[role] = t.value;
+			if (field === "penalties" || field === "pinningPenalties") {
+				const line = document.querySelector(`#pen-cost-${role}`);
+				if (line) line.innerHTML = penaltyLine(role, entryOf(role));
+			}
 		}
 		if (t.dataset.fb) {
 			const [role, id] = t.dataset.fb.split(":");

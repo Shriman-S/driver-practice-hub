@@ -21,7 +21,7 @@ function leaderboard(subs, role, settings) {
 	}).join("");
 	return `<div class="table-wrap"><table><thead><tr><th>Rank</th><th>Driver</th><th>Grade</th><th>Rounds</th>${byValue ? `<th title="What the rank is based on: ${esc(core.RANK_BASES[settings.rankBasis].label)}">Ranking score</th><th>Mean points</th>` : `<th title="Mean points in this role, out of ${core.pool(settings)}">Mean points</th>`}<th>Best</th><th>Avg gates</th><th>Finish rate</th><th>Avg finish (s)</th></tr></thead><tbody>${body || `<tr><td colspan="9" class="empty">No ${role} rounds recorded yet.</td></tr>`}</tbody></table></div>`;
 }
-function checkpointTable(list, settings) {
+function checkpointTable(list, settings, view) {
 	const s = core.roleStats(list, settings);
 	const runs = list.map((x) => core.readRun(x.data, settings));
 	const avgTime = (i) => {
@@ -29,7 +29,7 @@ function checkpointTable(list, settings) {
 		return t.length ? `${(Math.round((t.reduce((a, b) => a + b, 0) / t.length) * 10) / 10).toFixed(1)} s` : "--";
 	};
 	const rows = ["G1", "G2", "G3"].map((g, i) => `<tr><td>${g}</td><td>${s.gateRates[i]}% of rounds</td><td>${avgTime(i)}</td></tr>`).join("");
-	return `<div class="table-wrap"><table><thead><tr><th>Checkpoint</th><th>Crossed in</th><th>Average time when crossed</th></tr></thead><tbody>${rows}<tr><td>Finish zone</td><td>${s.finishRate}% of rounds</td><td>${s.avgFinish !== null ? `${s.avgFinish} s` : "--"}</td></tr></tbody></table></div><p class="help">${s.penalties} penalt${s.penalties === 1 ? "y" : "ies"} recorded in ${s.heats} round${s.heats === 1 ? "" : "s"}.</p>`;
+	return `<div class="table-wrap"><table><thead><tr><th>Checkpoint</th><th>Crossed in</th><th>Average time when crossed</th></tr></thead><tbody>${rows}<tr><td>Finish zone</td><td>${s.finishRate}% of rounds</td><td>${s.avgFinish !== null ? `${s.avgFinish} s` : "--"}</td></tr></tbody></table></div><p class="help">${s.penalties} regular penalt${s.penalties === 1 ? "y" : "ies"}${view === "defense" ? ` and ${s.pinning} pinning penalt${s.pinning === 1 ? "y" : "ies"}` : ""} recorded in ${s.heats} round${s.heats === 1 ? "" : "s"}.</p>`;
 }
 const legacyNote = (subs) => (legacyCount(subs) ? `<p class="help">${legacyCount(subs)} Offensive / Defensive attempt${legacyCount(subs) === 1 ? "" : "s"} recorded before Release 1.7 (including the short-lived two-heat format) stay in the database but are not shown or ranked, because they were scored on a different basis.</p>` : "");
 
@@ -44,7 +44,7 @@ export function territoryAnalysisHtml(state, view, attemptsSection) {
 		const name = view === "offense" ? "Offensive" : "Defensive";
 		return `<div class="metrics">${tile("Rounds", list.length)}${tile("Drivers", rows.length)}${tile("Mean points", mean === null ? "--" : pts(mean))}${tile("Top driver", rows[0] ? `${esc(rows[0].name)} <small>${pts(rows[0].value)}</small>` : "--")}</div>
   <section class="panel analysis-panel" style="margin-bottom:18px"><div class="panel-heading"><div><h3>Territory Breakthrough: ${name} rankings</h3><p>Drivers ranked by their mean ${name.toLowerCase()} points (out of ${core.pool(settings)}) across all their rounds.</p></div></div>${leaderboard(subs, view, settings)}${legacyNote(all)}</section>
-  <section class="panel analysis-panel" style="margin-bottom:18px"><div class="panel-heading"><div><h3>${view === "offense" ? "Checkpoint completion" : "How far the Offensive Driver got against this defense"}</h3></div></div>${checkpointTable(list, settings)}</section>
+  <section class="panel analysis-panel" style="margin-bottom:18px"><div class="panel-heading"><div><h3>${view === "offense" ? "Checkpoint completion" : "How far the Offensive Driver got against this defense"}</h3></div></div>${checkpointTable(list, settings, view)}</section>
   ${attemptsSection({ scope: view, list, title: `${name} rounds`, note: "Most recent first. Checkpoint times, penalties, and each round's points. Edit corrects a recorded time." })}`;
 	}
 	const matches = core.groupMatches(subs);
@@ -148,13 +148,13 @@ export function openEditTerritoryAttempt(api, id) {
 	content.innerHTML = `<div class="modal-head"><div><p class="eyebrow">EDIT ${x.facet === "offense" ? "OFFENSIVE" : "DEFENSIVE"} FORM</p><h2>${esc(x.driverName)}, round ${esc(d.round)}</h2></div><button class="close" id="close-modal">\u00d7</button></div>
   <div class="t-two">${field("driverName", "Driver name", x.driverName)}${field("grade", "Grade", x.grade)}</div>
   <div class="t-two">${field("g1", "G1 time (s), empty = not crossed", d.g1, 'type="number" step="0.1" min="0"')}${field("g2", "G2 time (s)", d.g2, 'type="number" step="0.1" min="0"')}${field("g3", "G3 time (s)", d.g3, 'type="number" step="0.1" min="0"')}${field("finishTime", "Finish time (s)", d.finishTime, 'type="number" step="0.1" min="0"')}</div>
-  ${field("penalties", "Penalties", d.penalties ?? 0, 'type="number" min="0" step="1"')}
+  ${field("penalties", "Regular penalties", d.penalties ?? 0, 'type="number" min="0" step="1"')}${x.facet === "defense" ? field("pinningPenalties", "Pinning penalties", d.pinningPenalties ?? 0, 'type="number" min="0" step="1"') : ""}
   <label class="field"><span>Notes</span><textarea data-k="notes" rows="2">${esc(d.notes || "")}</textarea></label>
   <p class="help" id="te-msg"></p><div class="form-actions"><button class="button button-secondary" id="te-cancel">Cancel</button><button class="button" id="te-save">Save changes</button></div>`;
 	api.modal.showModal?.();
 	if (!modal.open) modal.showModal();
 	const get = () => Object.fromEntries([...content.querySelectorAll("[data-k]")].map((el) => [el.dataset.k, el.value]));
-	const draftOf = (v) => ({ ...d, g1: v.g1 === "" ? "" : Number(v.g1), g2: v.g2 === "" ? "" : Number(v.g2), g3: v.g3 === "" ? "" : Number(v.g3), finishTime: v.finishTime === "" ? "" : Number(v.finishTime), penalties: Number(v.penalties) || 0, notes: v.notes });
+	const draftOf = (v) => ({ ...d, g1: v.g1 === "" ? "" : Number(v.g1), g2: v.g2 === "" ? "" : Number(v.g2), g3: v.g3 === "" ? "" : Number(v.g3), finishTime: v.finishTime === "" ? "" : Number(v.finishTime), penalties: Number(v.penalties) || 0, pinningPenalties: x.facet === "defense" ? Number(v.pinningPenalties) || 0 : 0, notes: v.notes });
 	content.querySelector("#close-modal").onclick = content.querySelector("#te-cancel").onclick = () => modal.close();
 	content.querySelector("#te-save").onclick = async () => {
 		const v = get();
@@ -215,7 +215,7 @@ export function openTerritoryResponses(api, id) {
 	content.innerHTML = `<div class="modal-head"><div><p class="eyebrow">${role.toUpperCase()} FORM</p><h2>${esc(x.driverName)}, ${dateText(x.date)}</h2></div><button class="close" id="close-modal">\u00d7</button></div>
   <div class="resp-view"><dl class="resp-meta">${meta.map(([k, v]) => `<div><dt>${k}</dt><dd>${esc(v)}</dd></div>`).join("")}</dl>
   <h4>Objective results</h4><div class="table-wrap"><table class="t-run"><thead><tr><th>Checkpoint</th><th>Crossed</th><th>Elapsed time</th></tr></thead><tbody>${cps}</tbody></table></div>
-  <p class="help">${run.gates}/3 checkpoints, ${run.finished ? "finished" : "did not finish"}. Penalties: ${esc(d.penalties ?? 0)}.</p>
+  <p class="help">${run.gates}/3 checkpoints, ${run.finished ? "finished" : "did not finish"}. Penalties: ${esc(d.penalties ?? 0)} regular${x.facet === "defense" ? `, ${esc(d.pinningPenalties ?? 0)} pinning` : ""}.</p>
   ${group("Ratings", qs.filter((q) => q.type === "rating"))}${group("Observations", qs.filter((q) => q.type === "choice" || q.type === "multi"))}${group("Written feedback", qs.filter((q) => q.type === "paragraph"))}
   ${has(d.notes) ? `<h4>Notes</h4><blockquote class="resp-quote">${esc(d.notes)}</blockquote>` : ""}
   <p class="help">Coach feedback is for coaching only and never changes the score.</p></div>`;

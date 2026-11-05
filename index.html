@@ -13,6 +13,7 @@
         try { saved = localStorage.getItem("drivelab-theme"); } catch (e) {}
         var dark = saved ? saved === "dark" : window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
         document.documentElement.dataset.theme = dark ? "dark" : "light";
+        try { document.documentElement.dataset.sidebar = localStorage.getItem("drivelab-sidebar") === "collapsed" ? "collapsed" : "expanded"; } catch (e) {}
       })();
     </script>
     <link rel="stylesheet" href="css/styles.css" />
@@ -21,19 +22,20 @@
     <!-- This static app deliberately uses no trackers, ads, or third-party analytics. -->
     <div class="app-shell">
       <aside class="sidebar">
-        <a class="brand" href="#practice" aria-label="DriveLab: go to the Practice form" title="Go to the Practice form"><span class="brand-mark">DL</span><span>DriveLab<small>DRIVER PRACTICE</small></span></a>
-        <nav aria-label="Primary navigation">
-          <button class="nav-link active" data-route="practice">Practice form</button>
-          <button class="nav-link" data-route="territory">Offense / Defense</button>
-          <button class="nav-link" data-route="calendar">Practice calendar</button>
-          <button class="nav-link" data-route="courses">Courses</button>
-          <button class="nav-link admin-only" data-route="analysis" hidden>Analysis</button>
-          <button class="nav-link admin-only" data-route="scoring" hidden>Scoring settings</button>
-          <button class="nav-link admin-only" data-route="course-builder" hidden>Course builder</button>
-          <button class="nav-link admin-only" data-route="forms" hidden>Form builder</button>
-          <button class="nav-link admin-only" data-route="admin" hidden>Admin</button>
+        <button type="button" id="sidebar-toggle" class="sidebar-toggle" aria-controls="primary-nav" aria-expanded="true" aria-label="Collapse the sidebar" title="Collapse the sidebar"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 6l-6 6 6 6"/></svg><span class="nav-label">Collapse</span></button>
+        <a class="brand" href="#practice" aria-label="DriveLab: go to the Practice form" title="Go to the Practice form"><span class="brand-mark">DL</span><span class="brand-text">DriveLab<small>DRIVER PRACTICE</small></span></a>
+        <nav aria-label="Primary navigation" id="primary-nav">
+          <button class="nav-link active" data-route="practice" title="Practice form" aria-label="Practice form"><span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 4h6a1 1 0 0 1 1 1v1H8V5a1 1 0 0 1 1-1z"/><path d="M8 6H6a1 1 0 0 0-1 1v13a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V7a1 1 0 0 0-1-1h-2"/><path d="M9 12h6M9 16h4"/></svg></span><span class="nav-label">Practice form</span></button>
+          <button class="nav-link" data-route="territory" title="Offense / Defense" aria-label="Offense / Defense"><span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 3v5c0 4.5-3 8-7 10-4-2-7-5.5-7-10V6l7-3z"/><path d="M9 12l2 2 4-4"/></svg></span><span class="nav-label">Offense / Defense</span></button>
+          <button class="nav-link" data-route="calendar" title="Practice calendar" aria-label="Practice calendar"><span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="5" width="16" height="15" rx="2"/><path d="M8 3v4M16 3v4M4 10h16"/></svg></span><span class="nav-label">Practice calendar</span></button>
+          <button class="nav-link" data-route="courses" title="Courses" aria-label="Courses"><span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 4L4 6v14l5-2 6 2 5-2V4l-5 2-6-2z"/><path d="M9 4v14M15 6v14"/></svg></span><span class="nav-label">Courses</span></button>
+          <button class="nav-link admin-only" data-route="analysis" hidden title="Analysis" aria-label="Analysis"><span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 20V10M12 20V4M19 20v-7"/><path d="M3 20h18"/></svg></span><span class="nav-label">Analysis</span></button>
+          <button class="nav-link admin-only" data-route="scoring" hidden title="Scoring settings" aria-label="Scoring settings"><span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h10M18 7h2M4 17h2M10 17h10"/><circle cx="16" cy="7" r="2"/><circle cx="8" cy="17" r="2"/></svg></span><span class="nav-label">Scoring settings</span></button>
+          <button class="nav-link admin-only" data-route="course-builder" hidden title="Course builder" aria-label="Course builder"><span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20l4-1 11-11a2.1 2.1 0 0 0-3-3L5 16l-1 4z"/><path d="M14 7l3 3"/></svg></span><span class="nav-label">Course builder</span></button>
+          <button class="nav-link admin-only" data-route="forms" hidden title="Form builder" aria-label="Form builder"><span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="3" width="14" height="18" rx="2"/><path d="M9 8h6M9 12h6M9 16h3"/></svg></span><span class="nav-label">Form builder</span></button>
+          <button class="nav-link admin-only" data-route="admin" hidden title="Admin" aria-label="Admin"><span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l8 4v5c0 4.5-3.5 7.5-8 9-4.5-1.5-8-4.5-8-9V7l8-4z"/><circle cx="12" cy="11" r="2"/><path d="M8.5 16c.8-1.6 2-2.3 3.5-2.3s2.7.7 3.5 2.3"/></svg></span><span class="nav-label">Admin</span></button>
         </nav>
-        <div class="sidebar-footer"><span class="connection-dot"></span><span id="connection-status">Private local preview</span></div>
+        <div class="sidebar-footer"><span class="connection-dot" id="connection-dot"></span><span id="connection-status">Private local preview</span></div>
       </aside>
       <main>
         <header class="topbar"><div><p class="eyebrow" id="page-kicker">DRIVER DEVELOPMENT</p><h1 id="page-title">Practice form</h1></div><div class="account"><button id="theme-toggle" class="button button-secondary theme-toggle" type="button" aria-pressed="false" title="Switch to dark mode"><svg class="icon-moon" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5Z" fill="currentColor"/></svg><svg class="icon-sun" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><circle cx="12" cy="12" r="4.5" fill="currentColor"/><g stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 2v2.5M12 19.5V22M2 12h2.5M19.5 12H22M4.9 4.9l1.8 1.8M17.3 17.3l1.8 1.8M4.9 19.1l1.8-1.8M17.3 6.7l1.8-1.8"/></g></svg><span class="theme-label">Dark mode</span></button><span id="account-label">Guest recorder</span><button id="admin-button" class="button button-secondary">Administrator sign in</button></div></header>

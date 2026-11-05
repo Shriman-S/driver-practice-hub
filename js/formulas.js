@@ -27,7 +27,7 @@ import {
 	weightsEqual as weightsClose,
 } from "./scoring.js";
 import { esc } from "./util.js";
-import { offensePoints, defensePoints, pool as territoryPool, TERRITORY_DEFAULTS as DEFAULT_TERRITORY, BONUS_CURVES, RANK_BASES } from "./territorycore.js";
+import { offensePoints, defensePoints, pool as territoryPool, TERRITORY_DEFAULTS as DEFAULT_TERRITORY, BONUS_CURVES, RANK_BASES, PENALTY_CURVES } from "./territorycore.js";
 import { FACET_COURSE_GROUP } from "./constants.js";
 import { publishedCourses, courseLabel } from "./courses.js";
 
@@ -210,7 +210,11 @@ const TERRITORY_NAMES = {
 	finishPoints: ["finish points", (n) => `${n}`],
 	timeBonus: ["maximum time bonus", (n) => `${n}`],
 	bonusCurve: ["time bonus curve", (n) => BONUS_CURVES[n]?.label.replace(" (recommended)", "") || n],
-	penaltyPoints: ["points lost per penalty", (n) => `${n}`],
+	penaltyPoints: ["points lost per regular penalty", (n) => `${n}`],
+	penaltyCurve: ["how penalties add up", (n) => PENALTY_CURVES[n]?.label.replace(" (recommended)", "") || n],
+	penaltyBase: ["penalty growth number", (n) => `${n}`],
+	pinningMultiplier: ["pinning penalty multiplier", (n) => `${n}`],
+	pinSeconds: ["pinning time limit", (n) => `${n} s`],
 	countdown: ["start countdown", (n) => `${n} s`],
 	rankBasis: ["ranking basis", (n) => RANK_BASES[n]?.label.replace(" (recommended)", "") || n],
 	recentRounds: ["number of recent rounds", (n) => `${n}`],
@@ -229,7 +233,7 @@ export function territoryCard(facet, label, cfg) {
 	const curve = BONUS_CURVES[t.bonusCurve] || BONUS_CURVES.linear;
 	const x = `${frac(`${T} − ${v("t")}`, T)}`;
 	const cx = t.bonusCurve === "strict" ? `${x}<sup>2</sup>` : t.bonusCurve === "generous" ? `√${paren(x)}` : x;
-	const pen = t.penaltyPoints ? ` − ${t.penaltyPoints} × ${v("n")}` : "";
+	const pen = t.penaltyPoints ? ` − ${v("C")}<sub>penalties</sub>` : "";
 	const gateTerm = same ? `${mult(g[0])}${off ? v("G") : paren(`3 − ${v("G")}`)}` : off ? `${v("P")}<sub>crossed</sub>` : `${v("P")}<sub>denied</sub>`;
 	const eq = off
 		? `${v("O")} = ${gateTerm} + ${mult(t.finishPoints)}${v("F")} + ${t.timeBonus} × ${cx} × ${v("F")}${pen}`
@@ -238,7 +242,7 @@ export function territoryCard(facet, label, cfg) {
 	const rows = cases.map(([name, d]) => `<tr><td>${esc(name)}</td><td>${two(offensePoints(d, t).points)}</td><td>${two(defensePoints(d, t).points)}</td></tr>`).join("");
 	return `<article class="eq-card"><h4>${esc(label)} <small class="eq-method">Territory Breakthrough</small></h4>
   <div class="eq-row"><p class="eq-name">${off ? "Offensive" : "Defensive"} points for one round (out of ${two(total)})</p><div class="eq">${eq}</div>
-  <p class="eq-why">${v("G")} = checkpoints crossed in order (0 to 3), ${v("F")} = 1 if the finish zone was reached (after G3), otherwise 0, ${v("t")} = finish time in seconds (${T} when the robot does not finish)${t.penaltyPoints ? `, ${v("n")} = penalties received` : ""}. Checkpoint points: G1 = ${g[0]}, G2 = ${g[1]}, G3 = ${g[2]}${same ? "" : `; ${v("P")} adds up the ${off ? "crossed" : "denied"} ones`}. ${off ? "The time bonus is only earned by completing the whole route." : "The defender earns the checkpoints and finish that were denied, and the part of the time bonus the offense did not earn."} Time bonus curve: ${esc(curve.label.replace(" (recommended)", ""))}. ${t.penaltyPoints ? `Each penalty costs ${t.penaltyPoints} point${t.penaltyPoints === 1 ? "" : "s"} (never below 0), so the two scores may add up to a little less than ${two(total)}.` : `The offensive and defensive points of a round always add up to ${two(total)}.`}</p></div>
+  <p class="eq-why">${v("G")} = checkpoints crossed in order (0 to 3), ${v("F")} = 1 if the finish zone was reached (after G3), otherwise 0, ${v("t")} = finish time in seconds (${T} when the robot does not finish)${t.penaltyPoints ? `, ${v("C")}<sub>penalties</sub> = the cost of the penalties the driver received` : ""}. Checkpoint points: G1 = ${g[0]}, G2 = ${g[1]}, G3 = ${g[2]}${same ? "" : `; ${v("P")} adds up the ${off ? "crossed" : "denied"} ones`}. ${off ? "The time bonus is only earned by completing the whole route." : "The defender earns the checkpoints and finish that were denied, and the part of the time bonus the offense did not earn."} Time bonus curve: ${esc(curve.label.replace(" (recommended)", ""))}. ${t.penaltyPoints ? `A regular penalty costs ${t.penaltyPoints} point${t.penaltyPoints === 1 ? "" : "s"}${t.penaltyCurve === "growing" ? `, and each further penalty costs ${t.penaltyBase} times the one before it (${[1, 2, 3, 4].map((k) => two(t.penaltyPoints * Math.pow(t.penaltyBase, k - 1))).join(", ")}...)` : ""}. A pinning penalty is worth ${t.pinningMultiplier} times a regular penalty. Scores never go below 0, so the two scores may add up to a little less than ${two(total)}.` : `The offensive and defensive points of a round always add up to ${two(total)}.`}</p></div>
   <div class="eq-row eq-final"><p class="eq-name">Stored score and rankings</p><div class="eq">${v("Score")} = ${v(off ? "O" : "D")} ÷ ${two(total)} × 10</div><p class="eq-why">Drivers are ranked in each role by ${esc(RANK_BASES[t.rankBasis]?.label.replace(" (recommended)", "").toLowerCase() || "the mean")}${t.rankBasis === "recent" ? ` (the latest ${t.recentRounds})` : ""}. The two drivers alternate roles each round and the driver with more points wins the round; a match is won by winning 2 of 3 rounds. Pairing suggestions (administrators) start each driver from an assumed ${t.priorScore} for ${t.priorWeight} round${t.priorWeight === 1 ? "" : "s"} and weigh offensive and defensive skill gaps ${t.pairWeightOffense} : ${t.pairWeightDefense}.</p></div>
   <div class="table-wrap"><table><thead><tr><th>Example round</th><th>Offense</th><th>Defense</th></tr></thead><tbody>${rows}</tbody></table></div></article>`;
 }

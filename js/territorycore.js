@@ -22,7 +22,11 @@ export const TERRITORY_DEFAULTS = {
 	finishPoints: 20, // points for reaching the finish zone (offense) / preventing it (defense)
 	timeBonus: 20, // the most the finish-time bonus (offense) or the delay credit (defense) can be worth
 	bonusCurve: "linear", // how fast the time bonus shrinks as the offense takes longer: linear, strict, or generous (see BONUS_CURVES)
-	penaltyPoints: 0, // points taken off a driver's own score for each penalty they receive (0 = penalties are only recorded)
+	penaltyPoints: 0, // points taken off a driver's own score for a (regular) penalty (0 = penalties are only recorded)
+	penaltyCurve: "fixed", // fixed: every penalty costs the same; growing: each penalty costs penaltyBase x the one before (see PENALTY_CURVES)
+	penaltyBase: 2, // for the growing curve: the number each penalty's cost is multiplied by (2 = each costs double the last, 3 = triple)
+	pinningMultiplier: 2, // a pinning penalty costs this many times the value of a regular penalty at that point
+	pinSeconds: 3, // how long the Defensive Driver may hold a pin before they must back off
 	countdown: 3, // seconds between "both scorers ready" and the start of the timer, on both laptops
 	rankBasis: "mean", // what a driver's rank in each role is based on: mean, recent, or best (see RANK_BASES)
 	recentRounds: 5, // for rankBasis "recent": how many of a driver's most recent rounds in that role count
@@ -38,12 +42,18 @@ export const BONUS_CURVES = {
 	strict: { label: "Strict", note: "Only fast finishes earn most of the bonus. Finishing with half the time left earns a quarter of it.", f: (x) => x * x },
 	generous: { label: "Generous", note: "A slow finish still earns a good share. Finishing with half the time left earns about 71% of it.", f: (x) => Math.sqrt(x) },
 };
+// How penalties add up. Penalty number k (1st, 2nd, 3rd...) costs penaltyPoints x curve(k). With the growing curve and a base of 2 the
+// 1st costs 1 x, the 2nd 2 x, the 3rd 4 x, the 4th 8 x (the total after n penalties is x(2^n - 1)). With a base of 3: 1, 3, 9, 27.
+export const PENALTY_CURVES = {
+	fixed: { label: "Fixed (recommended)", note: "Every penalty costs the same amount.", f: () => 1 },
+	growing: { label: "Growing (exponential)", note: "Each penalty costs the base number times the one before it, so repeated penalties hurt more and more.", f: (k, base) => Math.pow(Math.max(1, base), Math.min(k - 1, 30)) },
+};
 export const RANK_BASES = {
 	mean: { label: "Mean of all rounds (recommended)", note: "Rank by the average of every round the driver has played in that role." },
 	recent: { label: "Mean of the most recent rounds", note: "Rank by the average of only the latest rounds, so improvement shows sooner." },
 	best: { label: "Best single round", note: "Rank by the driver's highest score in that role." },
 };
-const NUMERIC_KEYS = ["duration", "gate1Points", "gate2Points", "gate3Points", "finishPoints", "timeBonus", "penaltyPoints", "countdown", "recentRounds", "priorScore", "priorWeight", "pairWeightOffense", "pairWeightDefense"];
+const NUMERIC_KEYS = ["duration", "gate1Points", "gate2Points", "gate3Points", "finishPoints", "timeBonus", "penaltyPoints", "penaltyBase", "pinningMultiplier", "pinSeconds", "countdown", "recentRounds", "priorScore", "priorWeight", "pairWeightOffense", "pairWeightDefense"];
 export const GATES = 3;
 export const ROUNDS = 3;
 export const ROLES = { offense: "Offensive Driver", defense: "Defensive Driver" };
@@ -69,6 +79,9 @@ export function territorySettings(saved) {
 	out.recentRounds = Math.round(out.recentRounds);
 	if (BONUS_CURVES[saved?.bonusCurve]) out.bonusCurve = saved.bonusCurve;
 	if (RANK_BASES[saved?.rankBasis]) out.rankBasis = saved.rankBasis;
+	if (PENALTY_CURVES[saved?.penaltyCurve]) out.penaltyCurve = saved.penaltyCurve;
+	if (out.penaltyBase < 1) out.penaltyBase = 1;
+	if (out.pinSeconds < 1) out.pinSeconds = 1;
 	return out;
 }
 // Plain-language problems with a territory settings object (empty list = fine).
@@ -85,6 +98,10 @@ export function validateTerritory(t) {
 	need("finishPoints", "points for the finish");
 	need("timeBonus", "time bonus");
 	need("penaltyPoints", "points lost per penalty");
+	need("penaltyBase", "penalty growth base", 1);
+	need("pinningMultiplier", "pinning penalty multiplier");
+	need("pinSeconds", "pinning time limit", 1);
+	if (!PENALTY_CURVES[t?.penaltyCurve]) problems.push("Territory Breakthrough, penalties: choose how penalties add up.");
 	need("countdown", "start countdown");
 	need("recentRounds", "number of recent rounds", 1);
 	need("priorScore", "assumed score for new drivers");
@@ -135,9 +152,19 @@ export function runProblems(data = {}, t = TERRITORY_DEFAULTS) {
 // Offense:  the points of each checkpoint crossed  +  (if finished) finish points  +  bonus x curve((duration - t) / duration)
 // Defense:  the points of each checkpoint NOT crossed  +  (if not finished) finish points  +  bonus x (1 - curve(...))  (t = duration when not finished).
 // Without penalty costs the two always add up to pool() (100 with the defaults), so a round is zero-sum. When penalties cost points,
-// each driver loses penaltyPoints x (their own penalties), never going below 0.
+// each driver loses the cost of their own penalties (see penaltyBreakdown), never going below 0.
 const bonusShare = (r, t) => (r.finished ? (BONUS_CURVES[t.bonusCurve] || BONUS_CURVES.linear).f(Math.max(0, (t.duration - r.finishTime) / t.duration)) : 0);
-const penaltyCost = (data, t) => Math.max(0, num(data?.penalties) || 0) * (t.penaltyPoints || 0);
+// What a driver's penalties cost: regular penalties are counted first, then pinning penalties (each worth pinningMultiplier x a regular
+// penalty at that point). `list` gives the cost of each penalty in order.
+export function penaltyBreakdown(data, t = TERRITORY_DEFAULTS) {
+	const regular = Math.max(0, Math.round(num(data?.penalties) || 0)),
+		pinning = Math.max(0, Math.round(num(data?.pinningPenalties) || 0));
+	const curve = (PENALTY_CURVES[t.penaltyCurve] || PENALTY_CURVES.fixed).f;
+	const list = [];
+	for (let k = 1; k <= regular + pinning; k++) list.push((t.penaltyPoints || 0) * curve(k, t.penaltyBase) * (k > regular ? t.pinningMultiplier : 1));
+	return { regular, pinning, list, cost: round2(list.reduce((a, b) => a + b, 0)) };
+}
+const penaltyCost = (data, t) => penaltyBreakdown(data, t).cost;
 export function offensePoints(data, t = TERRITORY_DEFAULTS) {
 	const r = readRun(data, t);
 	let gates = 0;
@@ -275,6 +302,7 @@ export function roleStats(list, t = TERRITORY_DEFAULTS) {
 		avgFinish: avg(finishTimes),
 		avgGates: avg(runs.map((r) => r.gates)),
 		penalties: list.reduce((a, x) => a + (num(x.data.penalties) || 0), 0),
+		pinning: list.reduce((a, x) => a + (num(x.data.pinningPenalties) || 0), 0),
 	};
 }
 
@@ -369,7 +397,6 @@ export function closestOpponents(name, candidates, ratings, t = TERRITORY_DEFAUL
 const FAIL_REASONS = ["Defensive positioning prevented progress", "Offensive Driver made a driving or steering error", "Robot issue", "Time expired", "Other / unclear"];
 export const DEFAULT_FEEDBACK = {
 	defense: [
-		{ id: "positions", type: "multi", label: "Which defensive positioning areas did the driver use?", options: ["D1", "D2", "D3", "Other"], help: "Select all that apply. For coaching analysis only: the driver gets no points for visiting an area." },
 		{ id: "adjusted", type: "choice", label: "Did the Defensive Driver adjust their positioning in response to the Offensive Driver's movement?", options: ["Yes", "No", "Not observable"] },
 		{ id: "anticipate", type: "rating", label: "How effectively did the Defensive Driver anticipate the Offensive Driver's next movement?" },
 		{ id: "reposition", type: "rating", label: "How effectively did the Defensive Driver reposition throughout the round?" },
@@ -397,7 +424,7 @@ export function feedbackQuestions(savedForm, role) {
 	const saved = Array.isArray(savedForm?.feedback) ? savedForm.feedback : null;
 	if (!saved) return DEFAULT_FEEDBACK[role].map((q) => ({ ...q }));
 	return saved
-		.filter((q) => q && typeof q.id === "string" && typeof q.label === "string" && FEEDBACK_TYPES[q.type])
+		.filter((q) => q && typeof q.id === "string" && typeof q.label === "string" && FEEDBACK_TYPES[q.type] && q.id !== "positions") // (the removed D1-D3 question is dropped from older saved forms)
 		.map((q) => ({ id: q.id, type: q.type, label: q.label, help: q.help || "", options: Array.isArray(q.options) ? q.options.map(String) : [], examples: Array.isArray(q.examples) ? q.examples.map(String).filter(Boolean) : [] }));
 }
 

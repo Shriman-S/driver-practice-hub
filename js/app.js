@@ -159,6 +159,27 @@ function setRoute(route) {
 		.forEach((x) => x.classList.toggle("active", x.dataset.route === route));
 	render();
 }
+// The sidebar can be collapsed to a narrow strip of icons so the page has more room. The choice is remembered on this computer
+// (it is set on <html> before the page is drawn by the script in index.html, so there is no flash).
+function bindSidebarToggle() {
+	const button = document.querySelector("#sidebar-toggle");
+	if (!button) return;
+	const apply = (collapsed) => {
+		document.documentElement.dataset.sidebar = collapsed ? "collapsed" : "expanded";
+		const label = collapsed ? "Expand the sidebar" : "Collapse the sidebar";
+		button.setAttribute("aria-expanded", String(!collapsed));
+		button.setAttribute("aria-label", label);
+		button.title = label;
+		button.querySelector(".nav-label").textContent = collapsed ? "Expand" : "Collapse";
+		try {
+			localStorage.setItem("drivelab-sidebar", collapsed ? "collapsed" : "expanded");
+		} catch {
+			/* the choice just is not remembered */
+		}
+	};
+	apply(document.documentElement.dataset.sidebar === "collapsed");
+	button.onclick = () => apply(document.documentElement.dataset.sidebar !== "collapsed");
+}
 function savePracticeDraft() {
 	const form = document.querySelector("#practice-form");
 	if (!form) return;
@@ -1462,6 +1483,7 @@ async function init() {
 		setRoute("practice");
 	};
 	bindThemeToggle();
+	bindSidebarToggle();
 	try {
 		state.session = await store.initializeStorage();
 		await loadData();

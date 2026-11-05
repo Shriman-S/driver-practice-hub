@@ -118,7 +118,8 @@ body {
 .app-shell {
 	min-height: 100vh;
 	display: grid;
-	grid-template-columns: 244px minmax(0, 1fr); /* minmax: a wide table scrolls inside its panel instead of widening the page */
+	grid-template-columns: var(--sidebar-w, 244px) minmax(0, 1fr); /* minmax: a wide table scrolls inside its panel instead of widening the page */
+	transition: grid-template-columns 0.2s ease;
 }
 .sidebar {
 	background: var(--nav);
@@ -2684,3 +2685,59 @@ dialog.sheet .sheet-content .sheet-table {
 .t-explain-body h4:first-child { border-top: 0; padding-top: 0; margin-top: 4px; }
 .t-explain-body p, .t-explain-body ul { margin: 0; }
 .t-explain-body ul { padding-left: 20px; display: grid; gap: 6px; }
+
+/* ---------------------------------------------------------------- Release 2.0: rules and driver directions */
+.t-rules-list { margin: 12px 0 0; padding-left: 24px; display: grid; gap: 14px; line-height: 1.65; }
+.t-rules-list > li { padding-left: 4px; }
+.t-rules-list ul { margin: 8px 0 0; padding-left: 20px; display: grid; gap: 6px; }
+.t-directions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; margin-top: 12px; }
+.t-direction { border: 1px solid var(--line); border-radius: var(--radius); padding: 18px 20px; display: grid; gap: 10px; align-content: start; line-height: 1.6; }
+.t-direction.t-off { border-top: 4px solid #2a8fc4; background: transparent; }
+.t-direction.t-def { border-top: 4px solid #7a4fd1; background: transparent; }
+.t-direction h4 { margin: 0; }
+.t-direction p { margin: 0; }
+.t-direction ul { margin: 0; padding-left: 20px; display: grid; gap: 8px; }
+.t-goal { background: var(--soft); border-radius: 8px; padding: 10px 12px; }
+@media (max-width: 900px) { .t-directions { grid-template-columns: minmax(0, 1fr); } }
+
+/* ---------------------------------------------------------------- Release 2.2: collapsible sidebar */
+:root { --nav-icon: #b8c7d1; --nav-icon-active: #ffffff; }
+:root[data-theme="dark"] { --nav-icon: #9fb3c2; --nav-icon-active: #ffffff; }
+.sidebar { overflow: hidden auto; }
+.brand { order: 0; }
+.sidebar-toggle { order: 1; margin: 0 0 16px; }
+.sidebar nav { order: 2; }
+.sidebar-footer { order: 3; }
+.nav-link { display: flex; align-items: center; gap: 12px; width: 100%; }
+.nav-icon { display: inline-flex; flex: none; color: var(--nav-icon); transition: color 0.15s; }
+.nav-link:hover .nav-icon { color: var(--nav-icon-active); }
+.nav-link.active { box-shadow: inset 3px 0 0 var(--accent); }
+.nav-link.active .nav-icon { color: var(--accent); }
+.nav-label { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sidebar-toggle { display: flex; align-items: center; gap: 10px; width: 100%; background: transparent; border: 1px solid var(--nav-light); color: var(--nav-icon); border-radius: 8px; padding: 8px 13px; font: inherit; font-size: 13px; cursor: pointer; }
+.sidebar-toggle:hover { color: var(--nav-icon-active); background: var(--nav-light); }
+.sidebar-toggle svg { flex: none; transition: transform 0.2s; }
+.sidebar-toggle:focus-visible, .nav-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.brand-text { white-space: nowrap; }
+@media (min-width: 981px) {
+	:root[data-sidebar="collapsed"] .app-shell { --sidebar-w: 68px; }
+	:root[data-sidebar="collapsed"] .sidebar { padding: 25px 10px; }
+	:root[data-sidebar="collapsed"] .brand { justify-content: center; padding: 0 0 20px; }
+	:root[data-sidebar="collapsed"] .brand-text,
+	:root[data-sidebar="collapsed"] .nav-label,
+	:root[data-sidebar="collapsed"] #connection-status { display: none; }
+	:root[data-sidebar="collapsed"] .nav-link { justify-content: center; padding: 11px 0; }
+	:root[data-sidebar="collapsed"] .sidebar-toggle { justify-content: center; padding: 8px 0; }
+	:root[data-sidebar="collapsed"] .sidebar-toggle svg { transform: rotate(180deg); }
+	:root[data-sidebar="collapsed"] .sidebar-footer { justify-content: center; padding: 10px 0; }
+	/* The page uses the extra room: a larger maximum width and wider side margins on the top bar and the content. */
+	:root[data-sidebar="collapsed"] #app { max-width: 1900px; padding-left: clamp(32px, 4vw, 72px); padding-right: clamp(32px, 4vw, 72px); }
+	:root[data-sidebar="collapsed"] .topbar { padding-left: clamp(32px, 4vw, 72px); padding-right: clamp(32px, 4vw, 72px); }
+}
+/* On narrow screens the sidebar is a bar across the top, so it cannot be collapsed. */
+@media (max-width: 980px) {
+	.sidebar-toggle { display: none; }
+	.nav-link { width: auto; }
+	.brand { order: 0; }
+}
+@media (prefers-reduced-motion: reduce) { .app-shell, .sidebar-toggle svg { transition: none; } }
